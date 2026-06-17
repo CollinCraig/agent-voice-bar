@@ -703,7 +703,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         refreshButton.action = #selector(refreshTapped)
         header.addArrangedSubview(titleStack)
         header.addArrangedSubview(spacer)
-        for button in [replayButton, skipButton, stopButton, archiveButton, clearButton, refreshButton] {
+        for button in [skipButton, stopButton] {
             header.addArrangedSubview(button)
         }
         root.addArrangedSubview(header)
@@ -733,6 +733,8 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         filterRow.addArrangedSubview(sourceRuleControl)
         filterRow.addArrangedSubview(filterSpacer)
         filterRow.addArrangedSubview(resultCountLabel)
+        filterRow.addArrangedSubview(refreshButton)
+        filterRow.addArrangedSubview(clearButton)
         root.addArrangedSubview(panel(filterRow))
 
         let body = NSStackView()
@@ -772,8 +774,22 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         detailScroll.hasVerticalScroller = true
         detailScroll.drawsBackground = false
         detailScroll.borderType = .noBorder
-        detailStack.addArrangedSubview(detailTitle)
-        detailStack.addArrangedSubview(detailMeta)
+        let detailHeader = NSStackView()
+        detailHeader.orientation = .horizontal
+        detailHeader.alignment = .centerY
+        detailHeader.spacing = 10
+        let detailTitleStack = NSStackView()
+        detailTitleStack.orientation = .vertical
+        detailTitleStack.spacing = 2
+        detailTitleStack.addArrangedSubview(detailTitle)
+        detailTitleStack.addArrangedSubview(detailMeta)
+        let detailSpacer = NSView()
+        detailSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        detailHeader.addArrangedSubview(detailTitleStack)
+        detailHeader.addArrangedSubview(detailSpacer)
+        detailHeader.addArrangedSubview(replayButton)
+        detailHeader.addArrangedSubview(archiveButton)
+        detailStack.addArrangedSubview(detailHeader)
         detailStack.addArrangedSubview(detailScroll)
         let detailPanel = panel(detailStack)
         detailPanel.setContentHuggingPriority(.defaultLow, for: .horizontal)
