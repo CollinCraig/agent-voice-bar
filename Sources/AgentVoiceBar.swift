@@ -675,7 +675,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         let title = NSTextField(labelWithString: "Agent Voice Bar")
         title.font = .systemFont(ofSize: 24, weight: .semibold)
         title.textColor = Theme.text
-        let subtitle = NSTextField(labelWithString: "Agent inbox, local speech rendering, replay history")
+        let subtitle = NSTextField(labelWithString: "Inbox for agent updates and local readouts")
         subtitle.font = .systemFont(ofSize: 13, weight: .medium)
         subtitle.textColor = Theme.muted
         playbackStatusLabel.font = .systemFont(ofSize: 12, weight: .medium)
@@ -716,20 +716,24 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         searchField.delegate = self
         searchField.target = self
         searchField.action = #selector(searchChanged)
-        searchField.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        searchField.widthAnchor.constraint(equalToConstant: 300).isActive = true
         sourcePopup.target = self
         sourcePopup.action = #selector(sourceChanged)
-        sourcePopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        sourcePopup.widthAnchor.constraint(equalToConstant: 170).isActive = true
+        let ruleLabel = NSTextField(labelWithString: "Rule")
+        ruleLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        ruleLabel.textColor = Theme.muted
         sourceRuleControl.controlSize = .small
         sourceRuleControl.target = self
         sourceRuleControl.action = #selector(sourceRuleChanged)
-        sourceRuleControl.widthAnchor.constraint(equalToConstant: 230).isActive = true
+        sourceRuleControl.widthAnchor.constraint(equalToConstant: 220).isActive = true
         resultCountLabel.font = .systemFont(ofSize: 12, weight: .medium)
         resultCountLabel.textColor = Theme.muted
         let filterSpacer = NSView()
         filterSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         filterRow.addArrangedSubview(searchField)
         filterRow.addArrangedSubview(sourcePopup)
+        filterRow.addArrangedSubview(ruleLabel)
         filterRow.addArrangedSubview(sourceRuleControl)
         filterRow.addArrangedSubview(filterSpacer)
         filterRow.addArrangedSubview(resultCountLabel)
