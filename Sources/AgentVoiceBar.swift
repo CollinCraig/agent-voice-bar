@@ -51,6 +51,21 @@ struct VoiceConfig: Codable {
     }
 }
 
+struct VoiceRules: Codable {
+    var sources: [String: String] = [:]
+
+    init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case sources
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        sources = try values.decodeIfPresent([String: String].self, forKey: .sources) ?? [:]
+    }
+}
+
 struct VoiceItem: Codable {
     var id: String?
     var created_at: String?
@@ -103,6 +118,7 @@ struct VoiceCommand: Codable {
 final class VoiceStore {
     let appDir: URL
     let configURL: URL
+    let rulesURL: URL
     let stateURL: URL
     let pronunciationsURL: URL
     let queueURL: URL
@@ -112,6 +128,7 @@ final class VoiceStore {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         appDir = support.appendingPathComponent("AgentVoiceBar", isDirectory: true)
         configURL = appDir.appendingPathComponent("config.json")
+        rulesURL = appDir.appendingPathComponent("rules.json")
         stateURL = appDir.appendingPathComponent("state.json")
         pronunciationsURL = appDir.appendingPathComponent("pronunciations.json")
         queueURL = appDir.appendingPathComponent("queue.jsonl")
@@ -134,13 +151,50 @@ final class VoiceStore {
         try? data.write(to: configURL, options: .atomic)
     }
 
+    func readRules() -> VoiceRules {
+        guard let data = try? Data(contentsOf: rulesURL),
+              let decoded = try? JSONDecoder().decode(VoiceRules.self, from: data) else {
+            return VoiceRules()
+        }
+        return decoded
+    }
+
+    func writeRules(_ rules: VoiceRules) {
+        try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(rules) else { return }
+        try? data.write(to: rulesURL, options: .atomic)
+    }
+
+    func ruleMode(for source: String) -> String? {
+        let key = sourceKey(source)
+        return readRules().sources[key]
+    }
+
+    func setRuleMode(_ mode: String?, for source: String) {
+        let key = sourceKey(source)
+        guard !key.isEmpty else { return }
+        var rules = readRules()
+        if let mode, ["autoplay", "notify", "silent"].contains(mode) {
+            rules.sources[key] = mode
+        } else {
+            rules.sources.removeValue(forKey: key)
+        }
+        writeRules(rules)
+    }
+
+    func sourceKey(_ source: String) -> String {
+        source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
     func readState() -> VoiceState? {
         guard let data = try? Data(contentsOf: stateURL) else { return nil }
         return try? JSONDecoder().decode(VoiceState.self, from: data)
     }
 
     func storageSignature() -> String {
-        let urls = [configURL, stateURL, queueURL, commandURL]
+        let urls = [configURL, rulesURL, stateURL, queueURL, commandURL]
         return urls.map { url in
             let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0
             return "\(url.lastPathComponent):\(modified)"
@@ -392,6 +446,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
     private let listDocument = InboxDocumentView()
     private let searchField = NSSearchField()
     private let sourcePopup = NSPopUpButton()
+    private let sourceRuleControl = NSSegmentedControl(labels: ["Follow", "Speak", "Notify", "DND"], trackingMode: .selectOne, target: nil, action: nil)
     private let resultCountLabel = NSTextField(labelWithString: "0 messages")
     private let detailTitle = NSTextField(labelWithString: "Select a message")
     private let detailMeta = NSTextField(labelWithString: "Agent inbox")
@@ -486,12 +541,17 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         sourcePopup.target = self
         sourcePopup.action = #selector(sourceChanged)
         sourcePopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        sourceRuleControl.controlSize = .small
+        sourceRuleControl.target = self
+        sourceRuleControl.action = #selector(sourceRuleChanged)
+        sourceRuleControl.widthAnchor.constraint(equalToConstant: 250).isActive = true
         resultCountLabel.font = .systemFont(ofSize: 12, weight: .medium)
         resultCountLabel.textColor = Theme.muted
         let filterSpacer = NSView()
         filterSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         filterRow.addArrangedSubview(searchField)
         filterRow.addArrangedSubview(sourcePopup)
+        filterRow.addArrangedSubview(sourceRuleControl)
         filterRow.addArrangedSubview(filterSpacer)
         filterRow.addArrangedSubview(resultCountLabel)
         root.addArrangedSubview(panel(filterRow))
@@ -672,6 +732,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         } else {
             sourcePopup.selectItem(withTitle: "All Sources")
         }
+        updateSourceRuleControl()
     }
 
     private func filteredItems(_ items: [VoiceItem]) -> [VoiceItem] {
@@ -716,8 +777,41 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         return "No agent messages yet. Incoming MCP speech requests will appear here."
     }
 
+    private func updateSourceRuleControl() {
+        let source = sourcePopup.selectedItem?.title ?? "All Sources"
+        sourceRuleControl.isEnabled = source != "All Sources"
+        guard source != "All Sources" else {
+            sourceRuleControl.selectedSegment = 0
+            return
+        }
+        switch store.ruleMode(for: source) {
+        case "autoplay": sourceRuleControl.selectedSegment = 1
+        case "notify": sourceRuleControl.selectedSegment = 2
+        case "silent": sourceRuleControl.selectedSegment = 3
+        default: sourceRuleControl.selectedSegment = 0
+        }
+    }
+
+    private func modeForRuleSegment() -> String? {
+        switch sourceRuleControl.selectedSegment {
+        case 1: return "autoplay"
+        case 2: return "notify"
+        case 3: return "silent"
+        default: return nil
+        }
+    }
+
     @objc private func searchChanged() { reload() }
-    @objc private func sourceChanged() { reload() }
+    @objc private func sourceChanged() {
+        updateSourceRuleControl()
+        reload()
+    }
+    @objc private func sourceRuleChanged() {
+        let source = sourcePopup.selectedItem?.title ?? "All Sources"
+        guard source != "All Sources" else { return }
+        store.setRuleMode(modeForRuleSegment(), for: source)
+        reload()
+    }
     func controlTextDidChange(_ obj: Notification) {
         if obj.object as? NSSearchField === searchField {
             reload()
@@ -770,6 +864,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     private let notificationTitleLabel = NSTextField(labelWithString: "System")
     private let searchField = NSSearchField()
     private let sourcePopup = NSPopUpButton()
+    private let sourceRuleControl = NSSegmentedControl(labels: ["Follow", "Speak", "Notify", "DND"], trackingMode: .selectOne, target: nil, action: nil)
     private let inboxScrollView = NSScrollView()
     private let inboxDocument = InboxDocumentView()
     private let replayButton = NSButton(title: "Replay Last", target: nil, action: nil)
@@ -924,6 +1019,25 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         searchRow.addArrangedSubview(searchField)
         searchRow.addArrangedSubview(sourcePopup)
         inboxSectionHeader.addArrangedSubview(searchRow)
+
+        let ruleRow = NSStackView()
+        ruleRow.orientation = .horizontal
+        ruleRow.alignment = .centerY
+        ruleRow.spacing = 8
+        let ruleLabel = NSTextField(labelWithString: "Source rule")
+        ruleLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        ruleLabel.textColor = Theme.muted
+        ruleLabel.widthAnchor.constraint(equalToConstant: 72).isActive = true
+        sourceRuleControl.controlSize = .small
+        sourceRuleControl.target = self
+        sourceRuleControl.action = #selector(sourceRuleChanged)
+        sourceRuleControl.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        let ruleSpacer = NSView()
+        ruleSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        ruleRow.addArrangedSubview(ruleLabel)
+        ruleRow.addArrangedSubview(sourceRuleControl)
+        ruleRow.addArrangedSubview(ruleSpacer)
+        inboxSectionHeader.addArrangedSubview(ruleRow)
 
         let inboxActions = NSStackView()
         inboxActions.orientation = .horizontal
@@ -1167,6 +1281,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
 
         let items = store.recentItems(limit: 0)
         updateSourcePopup(with: items)
+        updateSourceRuleControl()
         let filteredCount = filtered(items).count
         let messageWord = items.count == 1 ? "message" : "messages"
         if filteredCount != items.count {
@@ -1310,6 +1425,30 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         }
     }
 
+    private func updateSourceRuleControl() {
+        let source = sourcePopup.selectedItem?.title ?? "All Sources"
+        sourceRuleControl.isEnabled = source != "All Sources"
+        guard source != "All Sources" else {
+            sourceRuleControl.selectedSegment = 0
+            return
+        }
+        switch store.ruleMode(for: source) {
+        case "autoplay": sourceRuleControl.selectedSegment = 1
+        case "notify": sourceRuleControl.selectedSegment = 2
+        case "silent": sourceRuleControl.selectedSegment = 3
+        default: sourceRuleControl.selectedSegment = 0
+        }
+    }
+
+    private func modeForRuleSegment() -> String? {
+        switch sourceRuleControl.selectedSegment {
+        case 1: return "autoplay"
+        case 2: return "notify"
+        case 3: return "silent"
+        default: return nil
+        }
+    }
+
     private func sourceName(_ item: VoiceItem) -> String {
         let value = (item.source ?? "agent").trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? "agent" : value
@@ -1365,6 +1504,15 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     }
 
     @objc private func sourceChanged() {
+        updateSourceRuleControl()
+        rebuildInbox()
+        reload()
+    }
+
+    @objc private func sourceRuleChanged() {
+        let source = sourcePopup.selectedItem?.title ?? "All Sources"
+        guard source != "All Sources" else { return }
+        store.setRuleMode(modeForRuleSegment(), for: source)
         rebuildInbox()
         reload()
     }
@@ -1864,12 +2012,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self.checkBackend { backendLine in
                 DispatchQueue.main.async {
                     let config = self.store.readConfig()
+                    let ruleCount = self.store.readRules().sources.count
                     let mode = self.displayModeName(config.mode)
                     let text = [
                         "Delivery: \(mode)",
                         "Voice: \(config.voice)",
                         "Render speed: \(config.speed)x",
                         "Talk speed: \(config.replay_speed)x",
+                        "Source rules: \(ruleCount)",
                         notificationLine,
                         terminalNotifierLine,
                         backendLine,

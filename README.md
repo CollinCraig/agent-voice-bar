@@ -27,6 +27,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - direct voice, real talk-speed, model-speed, energy, and variety controls
 - replayable scrolling inbox
 - inbox search and source/channel filtering in the mini app and Dashboard
+- per-source delivery rules for Speak/Notify/DND behavior
 - expandable full-message bubbles during replay
 - unread menu-bar count and archive/clear actions
 - Setup Doctor report for notification, fallback, backend, and mode checks
@@ -54,6 +55,8 @@ Use it for:
 - Shows message metadata like source, title, priority, mode, and render status.
 - Filters history by message text and source, so multiple agents can share one
   local inbox without becoming a wall of noise.
+- Lets individual sources follow the global mode or override it with their own
+  Speak, Notify, or DND rule.
 - Renders speech locally through the bundled Qwen/MLX backend.
 - Lets the app decide whether a ready message should speak, notify, or stay in
   DND.
@@ -198,6 +201,7 @@ Every message is stored locally in:
 Important files:
 
 - `config.json`: mode, voice, real talk-speed, model-speed, generation settings
+- `rules.json`: optional per-source delivery rules
 - `pronunciations.json`: custom pronunciation replacements
 - `queue.jsonl`: inbox history
 - `state.json`: latest item and app state

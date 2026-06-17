@@ -18,6 +18,7 @@ APP_DIR = Path(os.environ.get("AGENT_VOICE_HOME", Path.home() / "Library" / "App
 OUT_DIR = APP_DIR / "out"
 PRONUNCIATIONS_FILE = APP_DIR / "pronunciations.json"
 CONFIG_FILE = APP_DIR / "config.json"
+RULES_FILE = APP_DIR / "rules.json"
 STATE_FILE = APP_DIR / "state.json"
 QUEUE_FILE = APP_DIR / "queue.jsonl"
 MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
@@ -108,6 +109,29 @@ def load_config():
     if config.get("mode") not in {"autoplay", "notify", "silent"}:
         config["mode"] = "autoplay"
     return config
+
+
+def load_rules():
+    try:
+        if RULES_FILE.exists():
+            data = json.loads(RULES_FILE.read_text())
+            sources = data.get("sources") if isinstance(data, dict) else {}
+            if isinstance(sources, dict):
+                return {
+                    str(source).strip().lower(): str(mode)
+                    for source, mode in sources.items()
+                    if str(mode) in {"autoplay", "notify", "silent"}
+                }
+    except Exception:
+        pass
+    return {}
+
+
+def mode_for_source(source, fallback):
+    source_key = str(source or "").strip().lower()
+    if not source_key:
+        return fallback
+    return load_rules().get(source_key, fallback)
 
 
 def publish_state(item):
@@ -300,7 +324,8 @@ def synthesize_and_play(text, metadata=None):
     speed = str(config.get("speed") or SPEED)
     temperature = str(config.get("temperature") or TEMPERATURE)
     top_p = str(config.get("top_p") or TOP_P)
-    mode = str(config.get("mode") or "autoplay")
+    source = clean_label(metadata.get("source"), "mcp", 40)
+    mode = mode_for_source(source, str(config.get("mode") or "autoplay"))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(f"{voice}|{speed}|{temperature}|{top_p}|{speech_text}".encode()).hexdigest()[:16]
@@ -310,7 +335,7 @@ def synthesize_and_play(text, metadata=None):
     item = {
         "id": str(uuid.uuid4()),
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "source": clean_label(metadata.get("source"), "mcp", 40),
+        "source": source,
         "title": clean_label(metadata.get("title"), "", 120),
         "priority": clean_label(metadata.get("priority"), "normal", 20).lower(),
         "mode": mode,
