@@ -26,6 +26,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - app-owned playback and notifications
 - direct voice, real talk-speed, model-speed, energy, and variety controls
 - replayable scrolling inbox
+- inbox search and source/channel filtering in the mini app and Dashboard
 - expandable full-message bubbles during replay
 - unread menu-bar count and archive/clear actions
 - Setup Doctor report for notification, fallback, backend, and mode checks
@@ -51,6 +52,8 @@ Use it for:
 
 - Stores agent messages in a local, replayable inbox.
 - Shows message metadata like source, title, priority, mode, and render status.
+- Filters history by message text and source, so multiple agents can share one
+  local inbox without becoming a wall of noise.
 - Renders speech locally through the bundled Qwen/MLX backend.
 - Lets the app decide whether a ready message should speak, notify, or stay in
   DND.

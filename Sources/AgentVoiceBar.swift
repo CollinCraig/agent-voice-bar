@@ -379,7 +379,7 @@ final class BubbleRow: NSView {
     }
 }
 
-final class DashboardViewController: NSViewController {
+final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSearchFieldDelegate {
     let store: VoiceStore
     var onReplayFile: ((String) -> Void)?
     var onStop: (() -> Void)?
@@ -390,6 +390,9 @@ final class DashboardViewController: NSViewController {
     private var selectedItemKey: String?
     private let listScrollView = NSScrollView()
     private let listDocument = InboxDocumentView()
+    private let searchField = NSSearchField()
+    private let sourcePopup = NSPopUpButton()
+    private let resultCountLabel = NSTextField(labelWithString: "0 messages")
     private let detailTitle = NSTextField(labelWithString: "Select a message")
     private let detailMeta = NSTextField(labelWithString: "Agent inbox")
     private let detailText = NSTextView()
@@ -471,6 +474,28 @@ final class DashboardViewController: NSViewController {
         }
         root.addArrangedSubview(header)
 
+        let filterRow = NSStackView()
+        filterRow.orientation = .horizontal
+        filterRow.alignment = .centerY
+        filterRow.spacing = 10
+        searchField.placeholderString = "Search messages"
+        searchField.delegate = self
+        searchField.target = self
+        searchField.action = #selector(searchChanged)
+        searchField.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        sourcePopup.target = self
+        sourcePopup.action = #selector(sourceChanged)
+        sourcePopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        resultCountLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        resultCountLabel.textColor = Theme.muted
+        let filterSpacer = NSView()
+        filterSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        filterRow.addArrangedSubview(searchField)
+        filterRow.addArrangedSubview(sourcePopup)
+        filterRow.addArrangedSubview(filterSpacer)
+        filterRow.addArrangedSubview(resultCountLabel)
+        root.addArrangedSubview(panel(filterRow))
+
         let body = NSStackView()
         body.orientation = .horizontal
         body.spacing = 14
@@ -545,9 +570,13 @@ final class DashboardViewController: NSViewController {
     }
 
     func reload() {
-        let items = store.recentItems(limit: 0)
+        updateSourcePopup()
+        let items = filteredItems(store.recentItems(limit: 0))
         if selectedItemKey == nil {
             selectedItemKey = items.first?.stableKey
+        }
+        if let selectedItemKey, !items.contains(where: { $0.stableKey == selectedItemKey }) {
+            self.selectedItemKey = items.first?.stableKey
         }
         rebuildList()
         updateDetail()
@@ -557,10 +586,12 @@ final class DashboardViewController: NSViewController {
         for subview in listDocument.subviews {
             subview.removeFromSuperview()
         }
-        let items = store.recentItems(limit: 0)
+        let allItems = store.recentItems(limit: 0)
+        let items = filteredItems(allItems)
+        resultCountLabel.stringValue = countText(shown: items.count, total: allItems.count)
         let width: CGFloat = max(480, listScrollView.contentSize.width)
         if items.isEmpty {
-            let empty = NSTextField(wrappingLabelWithString: "No agent messages yet. Incoming MCP speech requests will appear here.")
+            let empty = NSTextField(wrappingLabelWithString: emptyDashboardText())
             empty.textColor = Theme.muted
             empty.font = .systemFont(ofSize: 13)
             empty.frame = NSRect(x: 12, y: 16, width: width - 24, height: 54)
@@ -593,7 +624,7 @@ final class DashboardViewController: NSViewController {
     }
 
     private func updateDetail() {
-        let item = store.recentItems(limit: 0).first { $0.stableKey == selectedItemKey }
+        let item = filteredItems(store.recentItems(limit: 0)).first { $0.stableKey == selectedItemKey }
         guard let item else {
             detailTitle.stringValue = "Select a message"
             detailMeta.stringValue = "Agent inbox"
@@ -623,18 +654,82 @@ final class DashboardViewController: NSViewController {
     }
 
     @objc private func replayTapped() {
-        guard let item = store.recentItems(limit: 0).first(where: { $0.stableKey == selectedItemKey }),
+        guard let item = filteredItems(store.recentItems(limit: 0)).first(where: { $0.stableKey == selectedItemKey }),
               let file = item.file else { return }
         onReplayFile?(file)
     }
 
+    private func updateSourcePopup() {
+        let selected = sourcePopup.selectedItem?.title ?? "All Sources"
+        let sources = Array(Set(store.recentItems(limit: 0).map { sourceName($0) })).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        sourcePopup.removeAllItems()
+        sourcePopup.addItem(withTitle: "All Sources")
+        for source in sources {
+            sourcePopup.addItem(withTitle: source)
+        }
+        if sources.contains(selected) {
+            sourcePopup.selectItem(withTitle: selected)
+        } else {
+            sourcePopup.selectItem(withTitle: "All Sources")
+        }
+    }
+
+    private func filteredItems(_ items: [VoiceItem]) -> [VoiceItem] {
+        let source = sourcePopup.selectedItem?.title ?? "All Sources"
+        let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return items.filter { item in
+            if source != "All Sources" && sourceName(item) != source {
+                return false
+            }
+            if query.isEmpty { return true }
+            let haystack = [
+                item.title,
+                item.source,
+                item.priority,
+                item.mode,
+                item.status,
+                item.text,
+                item.speech_text,
+                item.error,
+            ].compactMap { $0 }.joined(separator: " ").lowercased()
+            return haystack.contains(query)
+        }
+    }
+
+    private func sourceName(_ item: VoiceItem) -> String {
+        let value = (item.source ?? "agent").trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "agent" : value
+    }
+
+    private func countText(shown: Int, total: Int) -> String {
+        let word = total == 1 ? "message" : "messages"
+        return shown == total ? "\(total) \(word)" : "\(shown) shown / \(total) \(word)"
+    }
+
+    private func emptyDashboardText() -> String {
+        if !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "No messages match this search."
+        }
+        if (sourcePopup.selectedItem?.title ?? "All Sources") != "All Sources" {
+            return "No messages from this source yet."
+        }
+        return "No agent messages yet. Incoming MCP speech requests will appear here."
+    }
+
+    @objc private func searchChanged() { reload() }
+    @objc private func sourceChanged() { reload() }
+    func controlTextDidChange(_ obj: Notification) {
+        if obj.object as? NSSearchField === searchField {
+            reload()
+        }
+    }
     @objc private func stopTapped() { onStop?() }
     @objc private func archiveTapped() { onArchiveItem?(selectedItemKey) }
     @objc private func clearTapped() { onClearInbox?() }
     @objc private func refreshTapped() { reload() }
 }
 
-final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
+final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSearchFieldDelegate {
     let store: VoiceStore
     var onReplayLast: (() -> Void)?
     var onReplayFile: ((String) -> Void)?
@@ -673,6 +768,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     private let controlsTitle = NSTextField(labelWithString: "Voice Tuning")
     private let inboxCountLabel = NSTextField(labelWithString: "0 messages")
     private let notificationTitleLabel = NSTextField(labelWithString: "System")
+    private let searchField = NSSearchField()
+    private let sourcePopup = NSPopUpButton()
     private let inboxScrollView = NSScrollView()
     private let inboxDocument = InboxDocumentView()
     private let replayButton = NSButton(title: "Replay Last", target: nil, action: nil)
@@ -696,7 +793,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 760))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 800))
         view.wantsLayer = true
         view.layer?.backgroundColor = Theme.background.cgColor
     }
@@ -812,6 +909,21 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         inboxHeader.addArrangedSubview(inboxSpacer)
         inboxHeader.addArrangedSubview(dashboardButton)
         inboxSectionHeader.addArrangedSubview(inboxHeader)
+
+        let searchRow = NSStackView()
+        searchRow.orientation = .horizontal
+        searchRow.alignment = .centerY
+        searchRow.spacing = 8
+        searchField.placeholderString = "Search inbox"
+        searchField.delegate = self
+        searchField.target = self
+        searchField.action = #selector(searchChanged)
+        sourcePopup.target = self
+        sourcePopup.action = #selector(sourceChanged)
+        sourcePopup.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        searchRow.addArrangedSubview(searchField)
+        searchRow.addArrangedSubview(sourcePopup)
+        inboxSectionHeader.addArrangedSubview(searchRow)
 
         let inboxActions = NSStackView()
         inboxActions.orientation = .horizontal
@@ -1054,9 +1166,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         updateControlLabels()
 
         let items = store.recentItems(limit: 0)
+        updateSourcePopup(with: items)
         let filteredCount = filtered(items).count
         let messageWord = items.count == 1 ? "message" : "messages"
-        if filterControl.selectedSegment > 0 {
+        if filteredCount != items.count {
             inboxCountLabel.stringValue = "\(filteredCount) shown / \(items.count) \(messageWord)"
         } else {
             inboxCountLabel.stringValue = "\(items.count) \(messageWord)"
@@ -1136,20 +1249,42 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     }
 
     private func filtered(_ items: [VoiceItem]) -> [VoiceItem] {
-        switch filterControl.selectedSegment {
-        case 1:
-            return items.filter { $0.status == "ready" }
-        case 2:
-            return items.filter { item in
-                guard let status = item.status else { return false }
-                return status != "ready"
+        let source = sourcePopup.selectedItem?.title ?? "All Sources"
+        let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return items.filter { item in
+            switch filterControl.selectedSegment {
+            case 1:
+                if item.status != "ready" { return false }
+            case 2:
+                guard let status = item.status, status != "ready" else { return false }
+            default:
+                break
             }
-        default:
-            return items
+            if source != "All Sources" && sourceName(item) != source {
+                return false
+            }
+            if query.isEmpty { return true }
+            let haystack = [
+                item.title,
+                item.source,
+                item.priority,
+                item.mode,
+                item.status,
+                item.text,
+                item.speech_text,
+                item.error,
+            ].compactMap { $0 }.joined(separator: " ").lowercased()
+            return haystack.contains(query)
         }
     }
 
     private func emptyInboxText() -> String {
+        if !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "No messages match this search."
+        }
+        if (sourcePopup.selectedItem?.title ?? "All Sources") != "All Sources" {
+            return "No messages from this source in this filter."
+        }
         switch filterControl.selectedSegment {
         case 1:
             return "No ready messages in this filter yet."
@@ -1158,6 +1293,26 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         default:
             return "No messages yet. Notify and DND modes still save incoming agent speech here."
         }
+    }
+
+    private func updateSourcePopup(with items: [VoiceItem]) {
+        let selected = sourcePopup.selectedItem?.title ?? "All Sources"
+        let sources = Array(Set(items.map { sourceName($0) })).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        sourcePopup.removeAllItems()
+        sourcePopup.addItem(withTitle: "All Sources")
+        for source in sources {
+            sourcePopup.addItem(withTitle: source)
+        }
+        if sources.contains(selected) {
+            sourcePopup.selectItem(withTitle: selected)
+        } else {
+            sourcePopup.selectItem(withTitle: "All Sources")
+        }
+    }
+
+    private func sourceName(_ item: VoiceItem) -> String {
+        let value = (item.source ?? "agent").trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "agent" : value
     }
 
     private func displayModeName(_ mode: String) -> String {
@@ -1204,11 +1359,21 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         reload()
     }
 
+    @objc private func searchChanged() {
+        rebuildInbox()
+        reload()
+    }
+
+    @objc private func sourceChanged() {
+        rebuildInbox()
+        reload()
+    }
+
     @objc private func toggleTuningTapped() {
         tuningVisible.toggle()
         controlsPanel?.isHidden = !tuningVisible
         tuneButton.title = tuningVisible ? "Hide" : "Tune"
-        view.window?.setContentSize(NSSize(width: 500, height: tuningVisible ? 860 : 760))
+        view.window?.setContentSize(NSSize(width: 500, height: tuningVisible ? 900 : 800))
     }
 
     @objc private func modeChanged() {
@@ -1277,7 +1442,16 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        voiceChanged()
+        if obj.object as? NSTextField === voiceField {
+            voiceChanged()
+        }
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        if obj.object as? NSSearchField === searchField {
+            rebuildInbox()
+            reload()
+        }
     }
 
     @objc private func replayTapped() {
@@ -1367,7 +1541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         popoverController.onConfigChanged = { [weak self] in self?.updateIcon() }
         popoverController.onReplayRateChanged = { [weak self] rate in self?.setReplayRate(rate) }
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 800),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
