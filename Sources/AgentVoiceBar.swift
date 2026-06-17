@@ -378,42 +378,6 @@ final class BubbleRow: NSView {
     }
 }
 
-final class ChipView: NSView {
-    private let label = NSTextField(labelWithString: "")
-    private var tint: NSColor = Theme.cyan
-
-    init(_ text: String, color: NSColor = Theme.cyan) {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 1
-        label.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
-        label.alignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            label.topAnchor.constraint(equalTo: topAnchor, constant: 5),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
-            heightAnchor.constraint(equalToConstant: 28),
-        ])
-        update(text, color: color)
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func update(_ text: String, color: NSColor) {
-        tint = color
-        label.stringValue = text
-        label.textColor = color
-        layer?.backgroundColor = color.withAlphaComponent(0.10).cgColor
-        layer?.borderColor = color.withAlphaComponent(0.46).cgColor
-    }
-}
-
 final class DashboardViewController: NSViewController {
     let store: VoiceStore
     var onReplayFile: ((String) -> Void)?
@@ -691,7 +655,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     private var tuningVisible = false
     private var controlsPanel: NSView?
 
-    private let modeControl = NSSegmentedControl(labels: ["Auto", "Notify", "Silent"], trackingMode: .selectOne, target: nil, action: nil)
+    private let modeControl = NSSegmentedControl(labels: ["Speak", "Notify", "DND"], trackingMode: .selectOne, target: nil, action: nil)
     private let filterControl = NSSegmentedControl(labels: ["All", "Ready", "Active"], trackingMode: .selectOne, target: nil, action: nil)
     private let voiceField = NSTextField(string: "Chelsie")
     private let speedSlider = NSSlider(value: 1.35, minValue: 1.00, maxValue: 1.65, target: nil, action: nil)
@@ -704,13 +668,9 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     private let topPValueLabel = NSTextField(labelWithString: "0.85")
     private let statusLabel = NSTextField(labelWithString: "Waiting for messages")
     private let notificationLabel = NSTextField(labelWithString: "Notifications: checking")
-    private let controlsTitle = NSTextField(labelWithString: "Voice & Delivery")
+    private let controlsTitle = NSTextField(labelWithString: "Voice Tuning")
     private let inboxCountLabel = NSTextField(labelWithString: "0 messages")
     private let notificationTitleLabel = NSTextField(labelWithString: "System")
-    private let modeChip = ChipView("MODE", color: Theme.cyan)
-    private let voiceChip = ChipView("VOICE", color: Theme.green)
-    private let talkChip = ChipView("TALK", color: Theme.playing)
-    private let renderChip = ChipView("RENDER", color: Theme.amber)
     private let inboxScrollView = NSScrollView()
     private let inboxDocument = InboxDocumentView()
     private let replayButton = NSButton(title: "Replay Last", target: nil, action: nil)
@@ -795,13 +755,20 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         statusLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
         statusLabel.textColor = Theme.muted
 
+        let deliveryLabel = NSTextField(labelWithString: "Delivery")
+        deliveryLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        deliveryLabel.textColor = Theme.muted
+        modeControl.controlSize = .small
+        modeControl.target = self
+        modeControl.action = #selector(modeChanged)
+        modeControl.widthAnchor.constraint(equalToConstant: 208).isActive = true
+
         let voiceSummary = NSStackView()
         voiceSummary.orientation = .horizontal
         voiceSummary.alignment = .centerY
         voiceSummary.spacing = 7
-        for chip in [modeChip, voiceChip, talkChip, renderChip] {
-            voiceSummary.addArrangedSubview(chip)
-        }
+        voiceSummary.addArrangedSubview(deliveryLabel)
+        voiceSummary.addArrangedSubview(modeControl)
         let voiceSummarySpacer = NSView()
         voiceSummarySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         tuneButton.bezelStyle = .rounded
@@ -814,7 +781,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         voiceSummary.addArrangedSubview(voiceSummarySpacer)
         voiceSummary.addArrangedSubview(tuneButton)
         voiceSummary.addArrangedSubview(speakTestButton)
-        root.addArrangedSubview(voiceSummary)
+        root.addArrangedSubview(panel(voiceSummary, fill: false, padding: 8))
 
         let inboxSectionHeader = NSStackView()
         inboxSectionHeader.orientation = .vertical
@@ -917,7 +884,6 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         let controls = NSStackView()
         controls.orientation = .vertical
         controls.spacing = 7
-        controls.addArrangedSubview(labeledRow("Delivery", modeControl, labelWidth: 62))
         controls.addArrangedSubview(labeledRow("Voice", voiceField, labelWidth: 62))
         controls.addArrangedSubview(sliderRow("Talk", replaySpeedSlider, replaySpeedValueLabel, labelWidth: 62))
         controls.addArrangedSubview(sliderRow("Render", speedSlider, speedValueLabel, labelWidth: 62))
@@ -929,8 +895,6 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         tuningPanel.isHidden = !tuningVisible
         controlsPanel = tuningPanel
         root.addArrangedSubview(tuningPanel)
-        modeControl.target = self
-        modeControl.action = #selector(modeChanged)
         voiceField.delegate = self
         voiceField.target = self
         voiceField.action = #selector(voiceChanged)
@@ -1007,7 +971,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         return dot
     }
 
-    private func panel(_ content: NSView, fill: Bool) -> NSView {
+    private func panel(_ content: NSView, fill: Bool, padding: CGFloat = 10) -> NSView {
         let box = NSView()
         box.translatesAutoresizingMaskIntoConstraints = false
         box.wantsLayer = true
@@ -1018,10 +982,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         content.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(content)
         NSLayoutConstraint.activate([
-            content.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 10),
-            content.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -10),
-            content.topAnchor.constraint(equalTo: box.topAnchor, constant: 10),
-            content.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -10),
+            content.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: padding),
+            content.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -padding),
+            content.topAnchor.constraint(equalTo: box.topAnchor, constant: padding),
+            content.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -padding),
         ])
         if fill {
             box.setContentHuggingPriority(.defaultLow, for: .vertical)
@@ -1093,13 +1057,9 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
             inboxCountLabel.stringValue = "\(items.count) \(messageWord)"
         }
 
-        let modeText = config.mode.capitalized
+        let modeText = displayModeName(config.mode)
         let updated = state?.updated_at ?? "never"
         statusLabel.stringValue = "\(modeText) mode / updated \(updated)"
-        modeChip.update(modeText.uppercased(), color: color(forMode: config.mode))
-        voiceChip.update(config.voice.uppercased(), color: Theme.green)
-        talkChip.update("TALK \(format(replaySpeedSlider.doubleValue, digits: 2))X", color: Theme.playing)
-        renderChip.update("RENDER \(format(speedSlider.doubleValue, digits: 2))X", color: Theme.amber)
         tuneButton.title = tuningVisible ? "Hide" : "Tune"
         controlsPanel?.isHidden = !tuningVisible
 
@@ -1186,15 +1146,15 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         case 2:
             return "No active renders or failures right now."
         default:
-            return "No messages yet. Notify and silent mode still save incoming agent speech here."
+            return "No messages yet. Notify and DND modes still save incoming agent speech here."
         }
     }
 
-    private func color(forMode mode: String) -> NSColor {
+    private func displayModeName(_ mode: String) -> String {
         switch mode {
-        case "notify": return Theme.cyan
-        case "silent": return Theme.muted
-        default: return Theme.green
+        case "notify": return "Notify"
+        case "silent": return "DND"
+        default: return "Speak"
         }
     }
 
@@ -1466,17 +1426,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func updateIcon() {
         let config = store.readConfig()
         let symbol: String
+        let modeName: String
         switch config.mode {
-        case "notify": symbol = "bell.badge.circle.fill"
-        case "silent": symbol = "speaker.slash.circle.fill"
-        default: symbol = "waveform.circle.fill"
+        case "notify":
+            symbol = "bell.badge.circle.fill"
+            modeName = "Notify"
+        case "silent":
+            symbol = "speaker.slash.circle.fill"
+            modeName = "DND"
+        default:
+            symbol = "waveform.circle.fill"
+            modeName = "Speak"
         }
         if let button = statusItem.button,
            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Agent Voice") {
             image.isTemplate = true
             button.image = image
             button.title = unreadCount > 0 ? " \(min(unreadCount, 99))" : ""
-            button.toolTip = "Agent Voice Bar: \(config.mode.capitalized)"
+            button.toolTip = "Agent Voice Bar: \(modeName)"
         }
     }
 

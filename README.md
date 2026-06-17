@@ -9,7 +9,7 @@
 Agent Voice Bar is a local-first macOS app for messages from AI agents. Codex,
 Claude Code, or any MCP-capable tool can call a `speak_text` tool, and your Mac
 stores that message in an inbox, renders a local voice clip, and lets the app
-decide whether to notify, autoplay, or stay quiet.
+decide whether to speak, notify, or stay quiet.
 
 It is especially useful when agents run in another terminal, another app, or a
 remote SSH box. With a reverse SSH tunnel, a cloud/Ubuntu agent can still send
@@ -22,7 +22,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - inbox-first menu-bar app and full Dashboard window
 - local Qwen/MLX TTS backend
 - MCP `speak_text` tool with optional title/source/priority metadata
-- notify/autoplay/silent modes
+- Speak/Notify/DND delivery modes
 - app-owned playback and notifications
 - direct voice, real talk-speed, model-speed, energy, and variety controls
 - replayable scrolling inbox
@@ -51,8 +51,8 @@ Use it for:
 - Stores agent messages in a local, replayable inbox.
 - Shows message metadata like source, title, priority, mode, and render status.
 - Renders speech locally through the bundled Qwen/MLX backend.
-- Lets the app decide whether a ready message should notify, autoplay, or stay
-  silent.
+- Lets the app decide whether a ready message should speak, notify, or stay in
+  DND.
 - Keeps playback under app control so overlapping speech is avoidable.
 - Works with remote agents through a reverse SSH tunnel to your Mac.
 
@@ -172,9 +172,9 @@ Full local/remote instructions are in [docs/mcp-and-ssh.md](docs/mcp-and-ssh.md)
 
 ## App Modes
 
-- `Auto`: generate and play messages immediately.
+- `Speak`: generate and play messages immediately.
 - `Notify`: generate messages, notify you, and keep them in the inbox.
-- `Silent`: generate and keep messages without popping up or playing.
+- `DND`: generate and keep messages without popping up or playing.
 
 The menu-bar window is the quick control surface. Use `Dashboard` for a roomier
 history view, full message detail, replay, archive, and clear controls.
