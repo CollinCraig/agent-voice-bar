@@ -1207,6 +1207,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         view = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 760))
         view.wantsLayer = true
         view.layer?.backgroundColor = Theme.background.cgColor
+        view.layer?.cornerRadius = 14
+        view.layer?.borderColor = Theme.border.cgColor
+        view.layer?.borderWidth = 1
+        view.layer?.masksToBounds = true
     }
 
     override func viewDidLoad() {
@@ -2020,7 +2024,12 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     @objc private func quitTapped() { onQuit?() }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, AVAudioPlayerDelegate {
+final class PopoverPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate, AVAudioPlayerDelegate {
     private let store = VoiceStore()
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var panel: NSPanel!
@@ -2038,7 +2047,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var unreadCount = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(.accessory)
         registerBundleWithLaunchServices()
         configureNotifications(requestPermission: true)
         configurePopover()
@@ -2090,20 +2099,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         popoverController.onQuit = { NSApp.terminate(nil) }
         popoverController.onConfigChanged = { [weak self] in self?.updateIcon() }
         popoverController.onReplayRateChanged = { [weak self] rate in self?.setReplayRate(rate) }
-        panel = NSPanel(
+        panel = PopoverPanel(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 760),
-            styleMask: [.titled, .closable],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
         panel.title = "Agent Voice Bar"
-        panel.titlebarAppearsTransparent = false
-        panel.backgroundColor = Theme.background
-        panel.isOpaque = true
-        panel.isMovableByWindowBackground = true
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.isMovable = false
+        panel.isMovableByWindowBackground = false
+        panel.hidesOnDeactivate = true
         panel.isReleasedWhenClosed = false
         panel.level = .floating
         panel.collectionBehavior = [.transient, .fullScreenAuxiliary]
+        panel.delegate = self
         panel.contentViewController = popoverController
     }
 
@@ -2207,7 +2219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc private func togglePopover() {
-        if panel.isVisible && panel.isKeyWindow {
+        if panel.isVisible {
             panel.orderOut(nil)
         } else {
             popoverController.reload()
@@ -2216,7 +2228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func showPanel() {
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(.accessory)
         if panel.isMiniaturized {
             panel.deminiaturize(nil)
         }
@@ -2227,6 +2239,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         panel.orderFrontRegardless()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.panel.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard notification.object as? NSWindow === panel else { return }
+        panel.orderOut(nil)
+        if dashboardWindow?.isVisible != true {
+            NSApp.setActivationPolicy(.accessory)
         }
     }
 
