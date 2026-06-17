@@ -2193,6 +2193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     let config = self.store.readConfig()
                     let ruleCount = self.store.readRules().sources.count
                     let playbackLine = self.latestPlaybackLine()
+                    let audioLine = self.systemAudioLine()
                     let queueLine = "Autoplay queue: \(self.autoplayQueue.count)"
                     let mode = self.displayModeName(config.mode)
                     let text = [
@@ -2203,6 +2204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         "Source rules: \(ruleCount)",
                         queueLine,
                         playbackLine,
+                        audioLine,
                         notificationLine,
                         terminalNotifierLine,
                         backendLine,
@@ -2241,6 +2243,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 completion("Qwen speech backend responded, but speak_text was not confirmed.")
             }
         }.resume()
+    }
+
+    private func systemAudioLine() -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e",
+            "set s to get volume settings\nreturn (output volume of s as text) & \",\" & (output muted of s as text)"
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                return "System audio: unavailable"
+            }
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            let raw = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let parts = raw.split(separator: ",", maxSplits: 1).map(String.init)
+            let volume = parts.first?.isEmpty == false ? parts[0] : "unknown"
+            let muted = parts.count > 1 ? parts[1] : "unknown"
+            if muted == "true" {
+                return "System audio: muted, volume \(volume)%"
+            }
+            if volume == "0" {
+                return "System audio: volume 0%"
+            }
+            return "System audio: volume \(volume)%, muted \(muted)"
+        } catch {
+            return "System audio: unavailable - \(error.localizedDescription)"
+        }
     }
 
     private func deliverTerminalNotification(for item: VoiceItem) -> Bool {

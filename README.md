@@ -35,7 +35,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - playback audit trail for local audio start/finish/failure events
 - playback status shown on message rows and Dashboard detail
 - unread menu-bar count and archive/clear actions
-- Setup Doctor report for notification, fallback, backend, and mode checks
+- Setup Doctor report for notification, fallback, backend, audio, and mode checks
 - macOS notification fallback through `terminal-notifier`
 - optional remote use over reverse SSH
 
@@ -203,7 +203,7 @@ history view, full message detail, replay, archive, and clear controls.
 Use `Doctor` in the menu-bar window when something feels off. It writes a local
 report into the inbox with the current delivery mode, voice settings, native
 notification status, `terminal-notifier` fallback status, backend reachability,
-and bundle id.
+macOS output volume/mute state, and bundle id.
 
 Every message is stored locally in:
 
