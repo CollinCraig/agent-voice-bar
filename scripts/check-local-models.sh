@@ -27,7 +27,7 @@ else
 fi
 
 if [ -x "$PY" ]; then
-  echo "ok: backend python $($PY --version 2>&1)"
+  echo "ok: backend python $("${PY}" --version 2>&1)"
   if "$PY" - <<'PY' >/dev/null 2>&1
 import mlx_audio
 PY

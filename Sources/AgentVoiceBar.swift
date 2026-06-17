@@ -270,6 +270,7 @@ final class BubbleRow: NSView {
 
     private func footerText(for item: VoiceItem, isPlaying: Bool) -> String {
         if isPlaying { return "Playing now - click to stop" }
+        if item.source == "app" && item.file == nil { return "Notification only" }
         return item.file == nil ? "Audio rendering" : "Click to replay"
     }
 
@@ -827,9 +828,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func deliverNotification(for item: VoiceItem) {
         NSLog("Agent Voice Bar delivering notification for item \(item.id ?? "no-id")")
-        if deliverTerminalNotification(for: item) {
-            return
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            if settings.authorizationStatus == .denied {
+                _ = self.deliverTerminalNotification(for: item)
+                return
+            }
+
+            self.deliverNativeNotification(for: item)
         }
+    }
+
+    private func deliverNativeNotification(for item: VoiceItem) {
         let content = UNMutableNotificationContent()
         content.title = "Agent Voice Bar"
         content.subtitle = "Voice message ready"
@@ -841,6 +850,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().add(request) { error in
             if let error {
                 NSLog("Agent Voice Bar notification error: \(error.localizedDescription)")
+                _ = self.deliverTerminalNotification(for: item)
             } else {
                 NSLog("Agent Voice Bar UN notification accepted")
             }
@@ -866,7 +876,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             top_p: nil,
             text: text,
             speech_text: nil,
-            file: store.readState()?.last?.file
+            file: nil
         )
         store.appendManualItem(item)
         popoverController.reload()
@@ -891,6 +901,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             "-message", String((item.text ?? "A new voice message is ready.").prefix(240)),
             "-sound", "Glass",
             "-group", item.id ?? "codex-voice-bar",
+            "-sender", "com.collincraig.agentvoicebar",
             "-activate", "com.collincraig.agentvoicebar",
         ]
         do {
