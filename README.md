@@ -20,6 +20,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - local Qwen/MLX TTS backend
 - MCP `speak_text` tool
 - notify/autoplay/silent modes
+- direct voice, speed, energy, and variety controls
 - replayable scrolling inbox
 - expandable full-message bubbles during replay
 - macOS notification fallback through `terminal-notifier`

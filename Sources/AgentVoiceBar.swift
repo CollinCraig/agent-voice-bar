@@ -286,7 +286,7 @@ final class BubbleRow: NSView {
     }
 }
 
-final class VoicePopoverController: NSViewController {
+final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     let store: VoiceStore
     var onReplayLast: (() -> Void)?
     var onReplayFile: ((String) -> Void)?
@@ -304,7 +304,13 @@ final class VoicePopoverController: NSViewController {
     private var expandedItemID: String?
 
     private let modeControl = NSSegmentedControl(labels: ["Auto", "Notify", "Silent"], trackingMode: .selectOne, target: nil, action: nil)
-    private let speedControl = NSSegmentedControl(labels: ["1.20", "1.28", "1.35", "1.45"], trackingMode: .selectOne, target: nil, action: nil)
+    private let voiceField = NSTextField(string: "Chelsie")
+    private let speedSlider = NSSlider(value: 1.35, minValue: 1.00, maxValue: 1.65, target: nil, action: nil)
+    private let speedValueLabel = NSTextField(labelWithString: "1.35x")
+    private let temperatureSlider = NSSlider(value: 0.45, minValue: 0.20, maxValue: 0.80, target: nil, action: nil)
+    private let temperatureValueLabel = NSTextField(labelWithString: "0.45")
+    private let topPSlider = NSSlider(value: 0.85, minValue: 0.65, maxValue: 0.98, target: nil, action: nil)
+    private let topPValueLabel = NSTextField(labelWithString: "0.85")
     private let statusLabel = NSTextField(labelWithString: "Waiting for messages")
     private let notificationLabel = NSTextField(labelWithString: "Notifications: checking")
     private let inboxScrollView = NSScrollView()
@@ -412,12 +418,28 @@ final class VoicePopoverController: NSViewController {
         controls.orientation = .vertical
         controls.spacing = 8
         controls.addArrangedSubview(labeledRow("Delivery", modeControl, labelWidth: 62))
-        controls.addArrangedSubview(labeledRow("Speed", speedControl, labelWidth: 62))
+        controls.addArrangedSubview(labeledRow("Voice", voiceField, labelWidth: 62))
+        controls.addArrangedSubview(sliderRow("Speed", speedSlider, speedValueLabel, labelWidth: 62))
+        controls.addArrangedSubview(sliderRow("Energy", temperatureSlider, temperatureValueLabel, labelWidth: 62))
+        controls.addArrangedSubview(sliderRow("Variety", topPSlider, topPValueLabel, labelWidth: 62))
         root.addArrangedSubview(panel(controls, fill: false))
         modeControl.target = self
         modeControl.action = #selector(modeChanged)
-        speedControl.target = self
-        speedControl.action = #selector(speedChanged)
+        voiceField.delegate = self
+        voiceField.target = self
+        voiceField.action = #selector(voiceChanged)
+        voiceField.bezelStyle = .roundedBezel
+        voiceField.font = .systemFont(ofSize: 12.5, weight: .medium)
+        voiceField.textColor = Theme.text
+        voiceField.backgroundColor = Theme.elevated
+        for slider in [speedSlider, temperatureSlider, topPSlider] {
+            slider.isContinuous = true
+            slider.controlSize = .small
+            slider.target = self
+        }
+        speedSlider.action = #selector(speedSliderChanged)
+        temperatureSlider.action = #selector(temperatureSliderChanged)
+        topPSlider.action = #selector(topPSliderChanged)
 
         let buttons = NSStackView()
         buttons.orientation = .horizontal
@@ -545,6 +567,16 @@ final class VoicePopoverController: NSViewController {
         return row
     }
 
+    private func sliderRow(_ label: String, _ slider: NSSlider, _ value: NSTextField, labelWidth: CGFloat = 70) -> NSView {
+        let row = labeledRow(label, slider, labelWidth: labelWidth) as! NSStackView
+        value.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        value.textColor = Theme.muted
+        value.alignment = .right
+        value.widthAnchor.constraint(equalToConstant: 42).isActive = true
+        row.addArrangedSubview(value)
+        return row
+    }
+
     func setPlayingFile(_ file: String?) {
         playingFile = file
         if let file,
@@ -567,8 +599,13 @@ final class VoicePopoverController: NSViewController {
         default: modeControl.selectedSegment = 0
         }
 
-        let speeds = ["1.20", "1.28", "1.35", "1.45"]
-        speedControl.selectedSegment = speeds.firstIndex(of: config.speed) ?? 2
+        if voiceField.currentEditor() == nil {
+            voiceField.stringValue = config.voice
+        }
+        speedSlider.doubleValue = clampedDouble(config.speed, fallback: 1.35, min: 1.00, max: 1.65)
+        temperatureSlider.doubleValue = clampedDouble(config.temperature, fallback: 0.45, min: 0.20, max: 0.80)
+        topPSlider.doubleValue = clampedDouble(config.top_p, fallback: 0.85, min: 0.65, max: 0.98)
+        updateControlLabels()
 
         let modeText = config.mode.capitalized
         let updated = state?.updated_at ?? "never"
@@ -665,13 +702,56 @@ final class VoicePopoverController: NSViewController {
         onConfigChanged?()
     }
 
-    @objc private func speedChanged() {
-        let speeds = ["1.20", "1.28", "1.35", "1.45"]
+    @objc private func voiceChanged() {
         var config = store.readConfig()
-        config.speed = speeds[max(0, speedControl.selectedSegment)]
+        config.voice = voiceField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Chelsie" : voiceField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         store.writeConfig(config)
-        reload()
         onConfigChanged?()
+    }
+
+    @objc private func speedSliderChanged() {
+        writeSliderConfig { config in
+            config.speed = format(speedSlider.doubleValue, digits: 2)
+        }
+    }
+
+    @objc private func temperatureSliderChanged() {
+        writeSliderConfig { config in
+            config.temperature = format(temperatureSlider.doubleValue, digits: 2)
+        }
+    }
+
+    @objc private func topPSliderChanged() {
+        writeSliderConfig { config in
+            config.top_p = format(topPSlider.doubleValue, digits: 2)
+        }
+    }
+
+    private func writeSliderConfig(_ update: (inout VoiceConfig) -> Void) {
+        var config = store.readConfig()
+        update(&config)
+        store.writeConfig(config)
+        updateControlLabels()
+        onConfigChanged?()
+    }
+
+    private func updateControlLabels() {
+        speedValueLabel.stringValue = "\(format(speedSlider.doubleValue, digits: 2))x"
+        temperatureValueLabel.stringValue = format(temperatureSlider.doubleValue, digits: 2)
+        topPValueLabel.stringValue = format(topPSlider.doubleValue, digits: 2)
+    }
+
+    private func clampedDouble(_ value: String, fallback: Double, min: Double, max: Double) -> Double {
+        let parsed = Double(value) ?? fallback
+        return Swift.max(min, Swift.min(max, parsed))
+    }
+
+    private func format(_ value: Double, digits: Int) -> String {
+        String(format: "%.\(digits)f", value)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        voiceChanged()
     }
 
     @objc private func replayTapped() {
