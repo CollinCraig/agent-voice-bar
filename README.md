@@ -28,6 +28,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - replayable scrolling inbox
 - expandable full-message bubbles during replay
 - unread menu-bar count and archive/clear actions
+- Setup Doctor report for notification, fallback, backend, and mode checks
 - macOS notification fallback through `terminal-notifier`
 - optional remote use over reverse SSH
 
@@ -54,6 +55,7 @@ Use it for:
 - Lets the app decide whether a ready message should speak, notify, or stay in
   DND.
 - Keeps playback under app control so overlapping speech is avoidable.
+- Clears stale playback state if macOS audio startup or finish callbacks misbehave.
 - Works with remote agents through a reverse SSH tunnel to your Mac.
 
 ## Architecture
@@ -178,6 +180,11 @@ Full local/remote instructions are in [docs/mcp-and-ssh.md](docs/mcp-and-ssh.md)
 
 The menu-bar window is the quick control surface. Use `Dashboard` for a roomier
 history view, full message detail, replay, archive, and clear controls.
+
+Use `Doctor` in the menu-bar window when something feels off. It writes a local
+report into the inbox with the current delivery mode, voice settings, native
+notification status, `terminal-notifier` fallback status, backend reachability,
+and bundle id.
 
 Every message is stored locally in:
 

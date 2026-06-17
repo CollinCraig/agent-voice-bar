@@ -646,6 +646,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     var onOpenPronunciations: (() -> Void)?
     var onOpenFolder: (() -> Void)?
     var onOpenDashboard: (() -> Void)?
+    var onRunDoctor: (() -> Void)?
     var onArchiveItem: ((String?) -> Void)?
     var onClearInbox: (() -> Void)?
     var onQuit: (() -> Void)?
@@ -679,6 +680,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     private let speakTestButton = NSButton(title: "Speak Test", target: nil, action: nil)
     private let requestNotificationsButton = NSButton(title: "Request", target: nil, action: nil)
     private let testNotificationButton = NSButton(title: "Test", target: nil, action: nil)
+    private let doctorButton = NSButton(title: "Doctor", target: nil, action: nil)
     private let tuneButton = NSButton(title: "Tune", target: nil, action: nil)
     private let dashboardButton = NSButton(title: "Dashboard", target: nil, action: nil)
     private let archiveButton = NSButton(title: "Archive", target: nil, action: nil)
@@ -927,7 +929,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         notifyRow.addArrangedSubview(statusLabel)
         notifyRow.addArrangedSubview(notificationLabel)
         notifyRow.addArrangedSubview(notifySpacer)
-        for button in [requestNotificationsButton, testNotificationButton] {
+        for button in [requestNotificationsButton, testNotificationButton, doctorButton] {
             button.bezelStyle = .rounded
             notifyRow.addArrangedSubview(button)
         }
@@ -935,6 +937,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         requestNotificationsButton.action = #selector(requestNotificationsTapped)
         testNotificationButton.target = self
         testNotificationButton.action = #selector(testNotificationTapped)
+        doctorButton.target = self
+        doctorButton.action = #selector(doctorTapped)
         root.addArrangedSubview(panel(notifyRow, fill: false))
 
         let bottom = NSStackView()
@@ -1060,7 +1064,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
 
         let modeText = displayModeName(config.mode)
         let updated = state?.updated_at ?? "never"
-        statusLabel.stringValue = "\(modeText) mode / updated \(updated)"
+        statusLabel.stringValue = "\(modeText) / updated \(shortTimestamp(updated))"
         tuneButton.title = tuningVisible ? "Hide" : "Tune"
         controlsPanel?.isHidden = !tuningVisible
 
@@ -1162,6 +1166,16 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         case "silent": return "DND"
         default: return "Speak"
         }
+    }
+
+    private func shortTimestamp(_ value: String) -> String {
+        if value == "never" { return value }
+        let parser = ISO8601DateFormatter()
+        guard let date = parser.date(from: value) else { return value }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 
     private func height(for item: VoiceItem, width: CGFloat, isExpanded: Bool) -> CGFloat {
@@ -1277,6 +1291,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     @objc private func speakTestTapped() { onSpeakTest?() }
     @objc private func requestNotificationsTapped() { onRequestNotifications?() }
     @objc private func testNotificationTapped() { onTestNotification?() }
+    @objc private func doctorTapped() { onRunDoctor?() }
     @objc private func openNotificationSettingsTapped() { onOpenNotificationSettings?() }
     @objc private func openPronunciationsTapped() { onOpenPronunciations?() }
     @objc private func openFolderTapped() { onOpenFolder?() }
@@ -1298,6 +1313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var lastStorageSignature: String?
     private var audioPlayer: AVAudioPlayer?
     private var playingFile: String?
+    private var playbackWatchdog: Timer?
     private var unreadCount = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1344,6 +1360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         popoverController.onOpenPronunciations = { [weak self] in self?.openPronunciations() }
         popoverController.onOpenFolder = { [weak self] in self?.openFolder() }
         popoverController.onOpenDashboard = { [weak self] in self?.showDashboard() }
+        popoverController.onRunDoctor = { [weak self] in self?.runDoctor() }
         popoverController.onArchiveItem = { [weak self] key in self?.archiveItem(key) }
         popoverController.onClearInbox = { [weak self] in self?.clearInbox() }
         popoverController.onQuit = { NSApp.terminate(nil) }
@@ -1430,6 +1447,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case "show_panel":
             popoverController.reload()
             showPanel()
+        case "replay_last":
+            replayLast()
+        case "doctor":
+            runDoctor(showPanelWhenDone: true)
         default:
             NSLog("Agent Voice Bar unknown command: \(command.command)")
         }
@@ -1621,12 +1642,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         deliverNotification(for: item)
     }
 
+    private func appendAppMessage(title: String, text: String, priority: String = "normal") {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let item = VoiceItem(
+            id: UUID().uuidString,
+            created_at: now,
+            ready_at: now,
+            source: "app",
+            title: title,
+            priority: priority,
+            mode: "silent",
+            status: "ready",
+            voice: store.readConfig().voice,
+            speed: nil,
+            temperature: nil,
+            top_p: nil,
+            text: text,
+            speech_text: nil,
+            file: nil
+        )
+        store.appendManualItem(item)
+        lastSeenStateKey = "\(item.id ?? ""):\(item.status ?? "")"
+        lastStorageSignature = nil
+        popoverController.reload()
+        dashboardController?.reload()
+    }
+
+    private func runDoctor(showPanelWhenDone: Bool = false) {
+        popoverController.setNotificationStatus("Doctor: checking", color: Theme.cyan)
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            let notificationLine: String
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                notificationLine = settings.alertSetting == .disabled
+                    ? "Native notifications are authorized, but alert banners are off. Fallback notifications will be used."
+                    : "Native macOS notifications are authorized and alert banners are enabled."
+            case .denied:
+                notificationLine = "Native notifications are denied in System Settings. Open Notify Settings or rely on fallback notifications."
+            case .notDetermined:
+                notificationLine = "Native notification permission has not been granted yet. Use Request in the mini app."
+            @unknown default:
+                notificationLine = "Native notification status is unknown."
+            }
+            let terminalNotifierLine = self.terminalNotifierPath() == nil
+                ? "terminal-notifier fallback is not installed."
+                : "terminal-notifier fallback is installed."
+            self.checkBackend { backendLine in
+                DispatchQueue.main.async {
+                    let config = self.store.readConfig()
+                    let mode = self.displayModeName(config.mode)
+                    let text = [
+                        "Delivery: \(mode)",
+                        "Voice: \(config.voice)",
+                        "Render speed: \(config.speed)x",
+                        "Talk speed: \(config.replay_speed)x",
+                        notificationLine,
+                        terminalNotifierLine,
+                        backendLine,
+                        "Bundle id: \(Bundle.main.bundleIdentifier ?? "unknown")",
+                    ].joined(separator: "\n")
+                    self.appendAppMessage(title: "Setup Doctor", text: text, priority: "high")
+                    self.popoverController.setNotificationStatus("Doctor: report in inbox", color: Theme.green)
+                    if showPanelWhenDone {
+                        self.showPanel()
+                    }
+                }
+            }
+        }
+    }
+
+    private func checkBackend(completion: @escaping (String) -> Void) {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:51090")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 2.0
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = #"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#.data(using: .utf8)
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error {
+                completion("Qwen speech backend is not reachable on 127.0.0.1:51090: \(error.localizedDescription)")
+                return
+            }
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                completion("Qwen speech backend responded with HTTP \(http.statusCode).")
+                return
+            }
+            if let data,
+               let text = String(data: data, encoding: .utf8),
+               text.contains("speak_text") {
+                completion("Qwen speech backend is reachable and exposes speak_text.")
+            } else {
+                completion("Qwen speech backend responded, but speak_text was not confirmed.")
+            }
+        }.resume()
+    }
+
     private func deliverTerminalNotification(for item: VoiceItem) -> Bool {
-        let candidates = [
-            "/opt/homebrew/bin/terminal-notifier",
-            "/usr/local/bin/terminal-notifier",
-        ]
-        guard let executable = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+        guard let executable = terminalNotifierPath() else {
             NSLog("Agent Voice Bar terminal-notifier not installed")
             return false
         }
@@ -1665,6 +1776,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    private func terminalNotifierPath() -> String? {
+        [
+            "/opt/homebrew/bin/terminal-notifier",
+            "/usr/local/bin/terminal-notifier",
+        ].first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+    }
+
     private func notificationTitle(for item: VoiceItem) -> String {
         let title = (item.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !title.isEmpty { return title }
@@ -1691,6 +1809,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         stopPlayback()
 
+        guard FileManager.default.fileExists(atPath: file) else {
+            clearPlaybackState()
+            popoverController.setNotificationStatus("Playback: missing file", color: .systemRed)
+            appendAppMessage(title: "Playback failed", text: "Audio file was missing:\n\(file)", priority: "high")
+            return
+        }
+
         do {
             let player = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: file))
             player.enableRate = true
@@ -1698,28 +1823,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             player.delegate = self
             player.prepareToPlay()
             audioPlayer = player
+            guard player.play() else {
+                clearPlaybackState()
+                popoverController.setNotificationStatus("Playback: could not start", color: .systemRed)
+                return
+            }
             playingFile = file
             popoverController.setPlayingFile(file)
             dashboardController?.setPlayingFile(file)
-            player.play()
+            popoverController.setNotificationStatus("Playback: playing", color: Theme.playing)
+            schedulePlaybackWatchdog(for: file, player: player)
         } catch {
-            audioPlayer = nil
-            playingFile = nil
-            popoverController.setPlayingFile(nil)
-            dashboardController?.setPlayingFile(nil)
+            clearPlaybackState()
+            popoverController.setNotificationStatus("Playback: \(error.localizedDescription)", color: .systemRed)
         }
     }
 
     private func stopPlayback() {
         audioPlayer?.stop()
-        audioPlayer = nil
-        playingFile = nil
-        popoverController.setPlayingFile(nil)
-        dashboardController?.setPlayingFile(nil)
+        clearPlaybackState()
+        popoverController.setNotificationStatus("Playback: stopped", color: Theme.muted)
     }
 
     private func setReplayRate(_ rate: Float) {
-        audioPlayer?.rate = max(0.5, min(2.0, rate))
+        if let player = audioPlayer, let file = playingFile {
+            player.rate = max(0.5, min(2.0, rate))
+            schedulePlaybackWatchdog(for: file, player: player)
+        }
     }
 
     private func currentReplayRate() -> Float {
@@ -1727,20 +1857,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return max(0.5, min(2.0, parsed))
     }
 
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        guard audioPlayer === player else { return }
+    private func displayModeName(_ mode: String) -> String {
+        switch mode {
+        case "notify": return "Notify"
+        case "silent": return "DND"
+        default: return "Speak"
+        }
+    }
+
+    private func schedulePlaybackWatchdog(for file: String, player: AVAudioPlayer) {
+        playbackWatchdog?.invalidate()
+        let remaining = max(0.5, player.duration - player.currentTime)
+        let rate = Double(max(0.5, min(2.0, player.rate)))
+        let delay = min(600.0, remaining / rate + 1.25)
+        playbackWatchdog = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self, weak player] _ in
+            guard let self,
+                  let player,
+                  self.audioPlayer === player,
+                  self.playingFile == file else { return }
+            if !player.isPlaying {
+                self.clearPlaybackState()
+                self.popoverController.setNotificationStatus("Playback: finished", color: Theme.green)
+            } else {
+                self.schedulePlaybackWatchdog(for: file, player: player)
+            }
+        }
+    }
+
+    private func clearPlaybackState() {
+        playbackWatchdog?.invalidate()
+        playbackWatchdog = nil
         audioPlayer = nil
         playingFile = nil
         popoverController.setPlayingFile(nil)
         dashboardController?.setPlayingFile(nil)
     }
 
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        guard audioPlayer === player else { return }
+        clearPlaybackState()
+        popoverController.setNotificationStatus(flag ? "Playback: finished" : "Playback: stopped", color: flag ? Theme.green : Theme.muted)
+    }
+
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         guard audioPlayer === player else { return }
-        audioPlayer = nil
-        playingFile = nil
-        popoverController.setPlayingFile(nil)
-        dashboardController?.setPlayingFile(nil)
+        clearPlaybackState()
+        popoverController.setNotificationStatus("Playback: decode failed", color: .systemRed)
     }
 
     private func openPronunciations() {
