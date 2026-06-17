@@ -262,7 +262,17 @@ def replay_rate():
     return str(max(0.5, min(2.0, value)))
 
 
+def stop_agent_audio():
+    subprocess.run(
+        ["/usr/bin/pkill", "-f", "afplay.*AgentVoiceBar/out"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
 def play_audio(wav_path):
+    stop_agent_audio()
     subprocess.Popen(["/usr/bin/afplay", "-r", replay_rate(), "-q", "1", str(wav_path)])
 
 
