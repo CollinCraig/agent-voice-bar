@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -25,6 +26,7 @@ LANG = "English"
 SPEED = "1.35"
 TEMPERATURE = "0.45"
 TOP_P = "0.85"
+GENERATION_QUEUE = queue.Queue()
 
 DEFAULT_CONFIG = {
     "mode": "autoplay",
@@ -201,14 +203,26 @@ def tools_list(req_id):
             "tools": [
                 {
                     "name": "speak_text",
-                    "description": "Read text aloud on this Mac using local Qwen3-TTS via MLX.",
+                    "description": "Submit an agent inbox message and render it for local speech playback when enabled.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "text": {
                                 "type": "string",
-                                "description": "Text to synthesize and play aloud.",
-                            }
+                                "description": "Message body to store in the inbox and render as speech.",
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Optional short title for the inbox message.",
+                            },
+                            "source": {
+                                "type": "string",
+                                "description": "Optional agent/source name, such as Codex, Claude, or Ubuntu.",
+                            },
+                            "priority": {
+                                "type": "string",
+                                "description": "Optional priority label: low, normal, high, or urgent.",
+                            },
                         },
                         "required": ["text"],
                     },
@@ -220,63 +234,60 @@ def tools_list(req_id):
 
 def generate_and_deliver(item):
     wav_path = Path(item["file"])
-    if not wav_path.exists():
-        cmd = [
-            str(APP_DIR / ".venv" / "bin" / "mlx_audio.tts.generate"),
-            "--model",
-            MODEL,
-            "--text",
-            item["speech_text"],
-            "--voice",
-            item["voice"],
-            "--lang_code",
-            LANG,
-            "--speed",
-            item["speed"],
-            "--temperature",
-            item["temperature"],
-            "--top_p",
-            item["top_p"],
-            "--output_path",
-            str(OUT_DIR),
-            "--file_prefix",
-            wav_path.stem,
-            "--join_audio",
-        ]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    item["status"] = "ready"
-    item["ready_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    publish_state(item)
-
-    if item["mode"] == "autoplay":
-        play_audio(wav_path)
-
-
-def replay_rate():
-    config = load_config()
     try:
-        value = float(config.get("replay_speed") or 1.0)
-    except (TypeError, ValueError):
-        value = 1.0
-    return str(max(0.5, min(2.0, value)))
+        if not wav_path.exists():
+            item["status"] = "generating"
+            publish_state(item)
+            cmd = [
+                str(APP_DIR / ".venv" / "bin" / "mlx_audio.tts.generate"),
+                "--model",
+                MODEL,
+                "--text",
+                item["speech_text"],
+                "--voice",
+                item["voice"],
+                "--lang_code",
+                LANG,
+                "--speed",
+                item["speed"],
+                "--temperature",
+                item["temperature"],
+                "--top_p",
+                item["top_p"],
+                "--output_path",
+                str(OUT_DIR),
+                "--file_prefix",
+                wav_path.stem,
+                "--join_audio",
+            ]
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        item["status"] = "ready"
+        item["ready_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        publish_state(item)
+    except Exception as exc:
+        item["status"] = "failed"
+        item["error"] = str(exc)
+        item["ready_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        publish_state(item)
 
 
-def stop_agent_audio():
-    subprocess.run(
-        ["/usr/bin/pkill", "-f", "afplay.*AgentVoiceBar/out"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+def generation_worker():
+    while True:
+        item = GENERATION_QUEUE.get()
+        try:
+            generate_and_deliver(item)
+        finally:
+            GENERATION_QUEUE.task_done()
 
 
-def play_audio(wav_path):
-    stop_agent_audio()
-    subprocess.Popen(["/usr/bin/afplay", "-r", replay_rate(), "-q", "1", str(wav_path)])
+def clean_label(value, fallback, max_len=80):
+    value = " ".join(str(value or "").split())
+    return (value or fallback)[:max_len]
 
 
-def synthesize_and_play(text):
+def synthesize_and_play(text, metadata=None):
+    metadata = metadata or {}
     text = " ".join((text or "").split())
     if not text:
         raise ValueError("text is required")
@@ -299,9 +310,11 @@ def synthesize_and_play(text):
     item = {
         "id": str(uuid.uuid4()),
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "source": "mcp",
+        "source": clean_label(metadata.get("source"), "mcp", 40),
+        "title": clean_label(metadata.get("title"), "", 120),
+        "priority": clean_label(metadata.get("priority"), "normal", 20).lower(),
         "mode": mode,
-        "status": "ready" if wav_path.exists() else "generating",
+        "status": "ready" if wav_path.exists() else "queued",
         "voice": voice,
         "speed": speed,
         "temperature": temperature,
@@ -313,11 +326,9 @@ def synthesize_and_play(text):
     publish_state(item)
 
     if wav_path.exists():
-        if mode == "autoplay":
-            play_audio(wav_path)
         return {
             "accepted": True,
-            "spoken": mode == "autoplay",
+            "spoken": False,
             "notified": mode == "notify",
             "mode": mode,
             "status": "ready",
@@ -325,14 +336,14 @@ def synthesize_and_play(text):
             "file": str(wav_path),
         }
 
-    threading.Thread(target=generate_and_deliver, args=(item,), daemon=True).start()
+    GENERATION_QUEUE.put(item)
 
     return {
         "accepted": True,
         "spoken": False,
         "notified": mode == "notify",
         "mode": mode,
-        "status": "generating",
+        "status": "queued",
         "voice": voice,
         "file": str(wav_path),
     }
@@ -345,7 +356,7 @@ def tools_call(req_id, params):
         return response(req_id, error={"code": -32601, "message": f"Unknown tool: {name}"})
 
     try:
-        result = synthesize_and_play(args.get("text", ""))
+        result = synthesize_and_play(args.get("text", ""), args)
         return response(
             req_id,
             {
@@ -422,6 +433,7 @@ def run_http(port):
 
 
 if __name__ == "__main__":
+    threading.Thread(target=generation_worker, daemon=True).start()
     parser = argparse.ArgumentParser()
     parser.add_argument("--http", action="store_true")
     parser.add_argument("--port", type=int, default=51090)

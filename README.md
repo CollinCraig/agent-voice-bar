@@ -3,9 +3,10 @@
 > Beta local voice inbox for AI agents. Think "reverse Spokenly": agents talk
 > back to you through local TTS, notifications, and a replayable macOS inbox.
 
-Agent Voice Bar is a local-first macOS app for speech messages from AI agents.
-Codex, Claude Code, or any MCP-capable tool can call a `speak_text` tool, and
-your Mac turns that message into a local voice clip.
+Agent Voice Bar is a local-first macOS app for messages from AI agents. Codex,
+Claude Code, or any MCP-capable tool can call a `speak_text` tool, and your Mac
+stores that message in an inbox, renders a local voice clip, and lets the app
+decide whether to notify, autoplay, or stay quiet.
 
 It is especially useful when agents run in another terminal, another app, or a
 remote SSH box. With a reverse SSH tunnel, a cloud/Ubuntu agent can still send
@@ -18,11 +19,14 @@ voice updates to the Mac on your desk.
 This is beta software. The core loop works, but the app is still being polished:
 
 - local Qwen/MLX TTS backend
-- MCP `speak_text` tool
+- MCP `speak_text` tool with optional title/source/priority metadata
 - notify/autoplay/silent modes
+- app-owned playback and notifications
 - direct voice, real talk-speed, model-speed, energy, and variety controls
 - replayable scrolling inbox
+- full dashboard window for longer history and message detail
 - expandable full-message bubbles during replay
+- unread menu-bar count and archive/clear actions
 - macOS notification fallback through `terminal-notifier`
 - optional remote use over reverse SSH
 
@@ -53,7 +57,7 @@ Qwen speech backend on Mac
   v
 Agent Voice Bar macOS app
   |
-  | notify / autoplay / silent
+  | inbox / dashboard / notify / autoplay / silent
   v
 Your ears + replayable inbox
 ```
@@ -139,6 +143,19 @@ claude mcp add qwen_speech -- "$HOME/Library/Application Support/AgentVoiceBar/q
 
 Then ask your agent to call `qwen_speech.speak_text`.
 
+Basic tool payload:
+
+```json
+{
+  "text": "Build finished and the tests passed.",
+  "title": "Build finished",
+  "source": "Codex",
+  "priority": "normal"
+}
+```
+
+Only `text` is required.
+
 Full local/remote instructions are in [docs/mcp-and-ssh.md](docs/mcp-and-ssh.md).
 
 ## App Modes
@@ -146,6 +163,9 @@ Full local/remote instructions are in [docs/mcp-and-ssh.md](docs/mcp-and-ssh.md)
 - `Auto`: generate and play messages immediately.
 - `Notify`: generate messages, notify you, and keep them in the inbox.
 - `Silent`: generate and keep messages without popping up or playing.
+
+The menu-bar window is the quick control surface. Use `Dashboard` for a roomier
+history view, full message detail, replay, archive, and clear controls.
 
 Every message is stored locally in:
 

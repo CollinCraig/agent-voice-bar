@@ -55,6 +55,8 @@ struct VoiceItem: Codable {
     var created_at: String?
     var ready_at: String?
     var source: String?
+    var title: String?
+    var priority: String?
     var mode: String?
     var status: String?
     var voice: String?
@@ -64,6 +66,26 @@ struct VoiceItem: Codable {
     var text: String?
     var speech_text: String?
     var file: String?
+    var error: String?
+
+    var stableKey: String {
+        id ?? file ?? created_at ?? UUID().uuidString
+    }
+
+    var displayText: String {
+        if status == "failed", let error {
+            return "Failed to render audio: \(error)"
+        }
+        let trimmedTitle = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = text ?? "(empty)"
+        return trimmedTitle.isEmpty ? body : "\(trimmedTitle)\n\(body)"
+    }
+
+    var displayTitle: String {
+        let trimmedTitle = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty { return trimmedTitle }
+        return String((text ?? "Voice message").prefix(72))
+    }
 }
 
 struct VoiceState: Codable {
@@ -116,7 +138,15 @@ final class VoiceStore {
         return try? JSONDecoder().decode(VoiceState.self, from: data)
     }
 
-    func recentItems(limit: Int = 24) -> [VoiceItem] {
+    func storageSignature() -> String {
+        let urls = [configURL, stateURL, queueURL, commandURL]
+        return urls.map { url in
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0
+            return "\(url.lastPathComponent):\(modified)"
+        }.joined(separator: "|")
+    }
+
+    func recentItems(limit: Int = 300) -> [VoiceItem] {
         guard let content = try? String(contentsOf: queueURL, encoding: .utf8) else { return [] }
         var order: [String] = []
         var byID: [String: VoiceItem] = [:]
@@ -131,11 +161,40 @@ final class VoiceStore {
             }
             byID[key] = item
         }
-        return order.suffix(limit).compactMap { byID[$0] }.reversed()
+        let selectedOrder = limit > 0 ? Array(order.suffix(limit)) : order
+        return selectedOrder.compactMap { byID[$0] }.reversed()
     }
 
     func clearInbox() {
         try? "".write(to: queueURL, atomically: true, encoding: .utf8)
+        let state = VoiceState(last: nil, updated_at: ISO8601DateFormatter().string(from: Date()), config: readConfig())
+        if let data = try? JSONEncoder().encode(state) {
+            try? data.write(to: stateURL, options: .atomic)
+        }
+    }
+
+    func archiveItem(matching key: String?) {
+        guard let key, !key.isEmpty,
+              let content = try? String(contentsOf: queueURL, encoding: .utf8) else { return }
+        var remainingLines: [String] = []
+        var lastItem: VoiceItem?
+        for line in content.split(separator: "\n") {
+            let text = String(line)
+            guard let data = text.data(using: .utf8),
+                  let item = try? JSONDecoder().decode(VoiceItem.self, from: data) else {
+                remainingLines.append(text)
+                continue
+            }
+            let itemKey = item.stableKey
+            if itemKey == key { continue }
+            remainingLines.append(text)
+            lastItem = item
+        }
+        try? (remainingLines.joined(separator: "\n") + (remainingLines.isEmpty ? "" : "\n")).write(to: queueURL, atomically: true, encoding: .utf8)
+        let state = VoiceState(last: lastItem, updated_at: ISO8601DateFormatter().string(from: Date()), config: readConfig())
+        if let data = try? JSONEncoder().encode(state) {
+            try? data.write(to: stateURL, options: .atomic)
+        }
     }
 
     func consumeCommand() -> VoiceCommand? {
@@ -184,7 +243,7 @@ final class InboxDocumentView: NSView {
 final class BubbleRow: NSView {
     let item: VoiceItem
 
-    init(item: VoiceItem, isPlaying: Bool, isExpanded: Bool, target: AnyObject, action: Selector) {
+    init(item: VoiceItem, isPlaying: Bool, isExpanded: Bool, bubbleWidth: CGFloat, target: AnyObject, action: Selector) {
         self.item = item
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -237,7 +296,7 @@ final class BubbleRow: NSView {
         header.font = .monospacedSystemFont(ofSize: 10.5, weight: .medium)
         header.textColor = color(for: item.status, isPlaying: isPlaying)
 
-        let body = NSTextField(wrappingLabelWithString: item.text ?? "(empty)")
+        let body = NSTextField(wrappingLabelWithString: item.displayText)
         body.font = .systemFont(ofSize: 12.8, weight: .regular)
         body.textColor = Theme.text
         body.maximumNumberOfLines = isExpanded ? 0 : 2
@@ -250,7 +309,7 @@ final class BubbleRow: NSView {
         let overlay = ReplayBubbleButton(title: "", target: target, action: action)
         overlay.isBordered = false
         overlay.filePath = item.file
-        overlay.itemID = item.id
+        overlay.itemID = item.stableKey
         overlay.isEnabled = true
         overlay.toolTip = item.file == nil ? "Show full message" : (isPlaying ? "Stop playback" : "Replay and expand")
         overlay.translatesAutoresizingMaskIntoConstraints = false
@@ -268,7 +327,7 @@ final class BubbleRow: NSView {
             root.trailingAnchor.constraint(equalTo: trailingAnchor),
             root.topAnchor.constraint(equalTo: topAnchor),
             root.bottomAnchor.constraint(equalTo: bottomAnchor),
-            bubble.widthAnchor.constraint(equalToConstant: 356),
+            bubble.widthAnchor.constraint(equalToConstant: bubbleWidth),
             overlay.leadingAnchor.constraint(equalTo: leadingAnchor),
             overlay.trailingAnchor.constraint(equalTo: trailingAnchor),
             overlay.topAnchor.constraint(equalTo: topAnchor),
@@ -282,14 +341,20 @@ final class BubbleRow: NSView {
     }
 
     private func metaText(for item: VoiceItem, isPlaying: Bool) -> String {
+        let source = (item.source ?? "agent").uppercased()
         let mode = item.mode?.capitalized ?? "Message"
         let status = isPlaying ? "Playing" : (item.status?.capitalized ?? "Queued")
-        let speed = item.speed ?? "1.35"
-        return "\(mode) / \(status) / \(speed)x"
+        let priority = (item.priority ?? "normal").uppercased()
+        return priority == "NORMAL" ? "\(source) / \(mode) / \(status)" : "\(priority) / \(source) / \(status)"
+    }
+
+    private func bodyText(for item: VoiceItem) -> String {
+        return item.displayText
     }
 
     private func glyphText(for item: VoiceItem, isPlaying: Bool) -> String {
         if isPlaying { return "||" }
+        if item.status == "queued" { return ".." }
         return item.status == "ready" ? ">" : "..."
     }
 
@@ -305,10 +370,267 @@ final class BubbleRow: NSView {
         if isPlaying { return Theme.playing }
         switch status {
         case "ready": return Theme.green
+        case "queued": return Theme.amber
         case "generating": return .systemOrange
+        case "failed": return .systemRed
         default: return Theme.muted
         }
     }
+}
+
+final class DashboardViewController: NSViewController {
+    let store: VoiceStore
+    var onReplayFile: ((String) -> Void)?
+    var onStop: (() -> Void)?
+    var onArchiveItem: ((String?) -> Void)?
+    var onClearInbox: (() -> Void)?
+
+    private var playingFile: String?
+    private var selectedItemKey: String?
+    private let listScrollView = NSScrollView()
+    private let listDocument = InboxDocumentView()
+    private let detailTitle = NSTextField(labelWithString: "Select a message")
+    private let detailMeta = NSTextField(labelWithString: "Agent inbox")
+    private let detailText = NSTextView()
+    private let replayButton = NSButton(title: "Replay", target: nil, action: nil)
+    private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
+    private let archiveButton = NSButton(title: "Archive", target: nil, action: nil)
+    private let clearButton = NSButton(title: "Clear", target: nil, action: nil)
+    private let refreshButton = NSButton(title: "Refresh", target: nil, action: nil)
+
+    init(store: VoiceStore) {
+        self.store = store
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 980, height: 680))
+        view.wantsLayer = true
+        view.layer?.backgroundColor = Theme.background.cgColor
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        buildUI()
+        reload()
+    }
+
+    private func buildUI() {
+        let root = NSStackView()
+        root.orientation = .vertical
+        root.spacing = 14
+        root.edgeInsets = NSEdgeInsets(top: 20, left: 22, bottom: 18, right: 22)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            root.topAnchor.constraint(equalTo: view.topAnchor),
+            root.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
+        let header = NSStackView()
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 12
+        let titleStack = NSStackView()
+        titleStack.orientation = .vertical
+        titleStack.spacing = 2
+        let title = NSTextField(labelWithString: "Agent Voice Bar")
+        title.font = .systemFont(ofSize: 24, weight: .semibold)
+        title.textColor = Theme.text
+        let subtitle = NSTextField(labelWithString: "Agent inbox, local speech rendering, replay history")
+        subtitle.font = .systemFont(ofSize: 13, weight: .medium)
+        subtitle.textColor = Theme.muted
+        titleStack.addArrangedSubview(title)
+        titleStack.addArrangedSubview(subtitle)
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        for button in [replayButton, stopButton, archiveButton, clearButton, refreshButton] {
+            button.bezelStyle = .rounded
+        }
+        replayButton.target = self
+        replayButton.action = #selector(replayTapped)
+        stopButton.target = self
+        stopButton.action = #selector(stopTapped)
+        archiveButton.target = self
+        archiveButton.action = #selector(archiveTapped)
+        clearButton.target = self
+        clearButton.action = #selector(clearTapped)
+        refreshButton.target = self
+        refreshButton.action = #selector(refreshTapped)
+        header.addArrangedSubview(titleStack)
+        header.addArrangedSubview(spacer)
+        for button in [replayButton, stopButton, archiveButton, clearButton, refreshButton] {
+            header.addArrangedSubview(button)
+        }
+        root.addArrangedSubview(header)
+
+        let body = NSStackView()
+        body.orientation = .horizontal
+        body.spacing = 14
+        body.alignment = .top
+        body.setContentHuggingPriority(.defaultLow, for: .vertical)
+        root.addArrangedSubview(body)
+
+        listDocument.wantsLayer = true
+        listDocument.layer?.backgroundColor = NSColor.clear.cgColor
+        listScrollView.documentView = listDocument
+        listScrollView.hasVerticalScroller = true
+        listScrollView.drawsBackground = false
+        listScrollView.borderType = .noBorder
+        let listPanel = panel(listScrollView)
+        listPanel.widthAnchor.constraint(equalToConstant: 510).isActive = true
+        body.addArrangedSubview(listPanel)
+
+        let detailStack = NSStackView()
+        detailStack.orientation = .vertical
+        detailStack.spacing = 10
+        detailStack.translatesAutoresizingMaskIntoConstraints = false
+        detailTitle.font = .systemFont(ofSize: 18, weight: .semibold)
+        detailTitle.textColor = Theme.text
+        detailTitle.maximumNumberOfLines = 2
+        detailMeta.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        detailMeta.textColor = Theme.cyan
+        detailText.isEditable = false
+        detailText.drawsBackground = false
+        detailText.textColor = Theme.text
+        detailText.font = .systemFont(ofSize: 14, weight: .regular)
+        detailText.textContainerInset = NSSize(width: 4, height: 6)
+        let detailScroll = NSScrollView()
+        detailScroll.documentView = detailText
+        detailScroll.hasVerticalScroller = true
+        detailScroll.drawsBackground = false
+        detailScroll.borderType = .noBorder
+        detailStack.addArrangedSubview(detailTitle)
+        detailStack.addArrangedSubview(detailMeta)
+        detailStack.addArrangedSubview(detailScroll)
+        let detailPanel = panel(detailStack)
+        detailPanel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        body.addArrangedSubview(detailPanel)
+    }
+
+    private func panel(_ content: NSView) -> NSView {
+        let box = NSView()
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 8
+        box.layer?.backgroundColor = Theme.panel.cgColor
+        box.layer?.borderColor = Theme.border.cgColor
+        box.layer?.borderWidth = 1
+        content.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -12),
+            content.topAnchor.constraint(equalTo: box.topAnchor, constant: 12),
+            content.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -12),
+        ])
+        return box
+    }
+
+    func setPlayingFile(_ file: String?) {
+        playingFile = file
+        if let file,
+           let item = store.recentItems(limit: 0).first(where: { $0.file == file }) {
+            selectedItemKey = item.stableKey
+        }
+        rebuildList()
+        updateDetail()
+    }
+
+    func reload() {
+        let items = store.recentItems(limit: 0)
+        if selectedItemKey == nil {
+            selectedItemKey = items.first?.stableKey
+        }
+        rebuildList()
+        updateDetail()
+    }
+
+    private func rebuildList() {
+        for subview in listDocument.subviews {
+            subview.removeFromSuperview()
+        }
+        let items = store.recentItems(limit: 0)
+        let width: CGFloat = max(480, listScrollView.contentSize.width)
+        if items.isEmpty {
+            let empty = NSTextField(wrappingLabelWithString: "No agent messages yet. Incoming MCP speech requests will appear here.")
+            empty.textColor = Theme.muted
+            empty.font = .systemFont(ofSize: 13)
+            empty.frame = NSRect(x: 12, y: 16, width: width - 24, height: 54)
+            listDocument.addSubview(empty)
+            listDocument.frame = NSRect(x: 0, y: 0, width: width, height: max(560, listScrollView.contentSize.height))
+            return
+        }
+        var y: CGFloat = 0
+        for item in items {
+            let isExpanded = item.stableKey == selectedItemKey
+            let bubbleWidth = min(420, max(300, width - 74))
+            let rowHeight = height(for: item, width: width, isExpanded: isExpanded)
+            let row = BubbleRow(item: item, isPlaying: item.file == playingFile, isExpanded: isExpanded, bubbleWidth: bubbleWidth, target: self, action: #selector(messageTapped(_:)))
+            row.frame = NSRect(x: 0, y: y, width: width, height: rowHeight)
+            listDocument.addSubview(row)
+            y += rowHeight + 8
+        }
+        listDocument.frame = NSRect(x: 0, y: 0, width: width, height: max(560, y))
+    }
+
+    private func height(for item: VoiceItem, width: CGFloat, isExpanded: Bool) -> CGFloat {
+        if !isExpanded { return 92 }
+        let bubbleWidth = min(420, max(300, width - 74))
+        let bodyHeight = item.displayText.boundingRect(
+            with: NSSize(width: bubbleWidth - 22, height: 1600),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.systemFont(ofSize: 12.8, weight: .regular)]
+        ).height
+        return min(360, max(124, ceil(bodyHeight) + 74))
+    }
+
+    private func updateDetail() {
+        let item = store.recentItems(limit: 0).first { $0.stableKey == selectedItemKey }
+        guard let item else {
+            detailTitle.stringValue = "Select a message"
+            detailMeta.stringValue = "Agent inbox"
+            detailText.string = ""
+            replayButton.isEnabled = false
+            archiveButton.isEnabled = false
+            return
+        }
+        detailTitle.stringValue = item.displayTitle
+        let source = (item.source ?? "agent").uppercased()
+        let status = (item.status ?? "queued").uppercased()
+        let mode = (item.mode ?? "message").uppercased()
+        let created = item.created_at ?? "unknown time"
+        detailMeta.stringValue = "\(source) / \(mode) / \(status) / \(created)"
+        detailText.string = item.displayText
+        replayButton.isEnabled = item.file != nil
+        archiveButton.isEnabled = true
+    }
+
+    @objc private func messageTapped(_ sender: ReplayBubbleButton) {
+        selectedItemKey = sender.itemID ?? sender.filePath
+        rebuildList()
+        updateDetail()
+        if let file = sender.filePath {
+            onReplayFile?(file)
+        }
+    }
+
+    @objc private func replayTapped() {
+        guard let item = store.recentItems(limit: 0).first(where: { $0.stableKey == selectedItemKey }),
+              let file = item.file else { return }
+        onReplayFile?(file)
+    }
+
+    @objc private func stopTapped() { onStop?() }
+    @objc private func archiveTapped() { onArchiveItem?(selectedItemKey) }
+    @objc private func clearTapped() { onClearInbox?() }
+    @objc private func refreshTapped() { reload() }
 }
 
 final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
@@ -322,6 +644,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     var onOpenNotificationSettings: (() -> Void)?
     var onOpenPronunciations: (() -> Void)?
     var onOpenFolder: (() -> Void)?
+    var onOpenDashboard: (() -> Void)?
+    var onArchiveItem: ((String?) -> Void)?
     var onClearInbox: (() -> Void)?
     var onQuit: (() -> Void)?
     var onConfigChanged: (() -> Void)?
@@ -348,6 +672,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     private let speakTestButton = NSButton(title: "Speak Test", target: nil, action: nil)
     private let requestNotificationsButton = NSButton(title: "Request", target: nil, action: nil)
     private let testNotificationButton = NSButton(title: "Test", target: nil, action: nil)
+    private let dashboardButton = NSButton(title: "Dashboard", target: nil, action: nil)
+    private let archiveButton = NSButton(title: "Archive", target: nil, action: nil)
     private let clearInboxButton = NSButton(title: "Clear", target: nil, action: nil)
 
     init(store: VoiceStore) {
@@ -494,11 +820,15 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         inboxTitle.textColor = Theme.muted
         let inboxSpacer = NSView()
         inboxSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        archiveButton.bezelStyle = .rounded
+        archiveButton.target = self
+        archiveButton.action = #selector(archiveTapped)
         clearInboxButton.bezelStyle = .rounded
         clearInboxButton.target = self
         clearInboxButton.action = #selector(clearInboxTapped)
         inboxHeader.addArrangedSubview(inboxTitle)
         inboxHeader.addArrangedSubview(inboxSpacer)
+        inboxHeader.addArrangedSubview(archiveButton)
         inboxHeader.addArrangedSubview(clearInboxButton)
         root.addArrangedSubview(inboxHeader)
 
@@ -530,6 +860,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         let bottom = NSStackView()
         bottom.orientation = .horizontal
         bottom.spacing = 8
+        dashboardButton.bezelStyle = .rounded
+        dashboardButton.target = self
+        dashboardButton.action = #selector(openDashboardTapped)
+        bottom.addArrangedSubview(dashboardButton)
         for (label, action) in [
             ("Notify Settings", #selector(openNotificationSettingsTapped)),
             ("Pronunciations", #selector(openPronunciationsTapped)),
@@ -611,7 +945,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         playingFile = file
         if let file,
            let item = store.recentItems(limit: 80).first(where: { $0.file == file }) {
-            expandedItemID = item.id ?? item.file
+            expandedItemID = item.stableKey
         }
         rebuildInbox()
     }
@@ -689,10 +1023,11 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         }
         var y: CGFloat = 0
         for item in items {
-            let itemKey = item.id ?? item.file ?? item.created_at
+            let itemKey = item.stableKey
             let isExpanded = itemKey == expandedItemID
+            let bubbleWidth = min(380, max(260, width - 74))
             let rowHeight = height(for: item, width: width, isExpanded: isExpanded)
-            let row = BubbleRow(item: item, isPlaying: item.file == playingFile, isExpanded: isExpanded, target: self, action: #selector(replayBubble(_:)))
+            let row = BubbleRow(item: item, isPlaying: item.file == playingFile, isExpanded: isExpanded, bubbleWidth: bubbleWidth, target: self, action: #selector(replayBubble(_:)))
             row.translatesAutoresizingMaskIntoConstraints = true
             row.frame = NSRect(x: 0, y: y, width: width, height: rowHeight)
             inboxDocument.addSubview(row)
@@ -705,8 +1040,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
 
     private func height(for item: VoiceItem, width: CGFloat, isExpanded: Bool) -> CGFloat {
         if !isExpanded { return 92 }
-        let text = item.text ?? ""
-        let bubbleWidth = min(356, max(260, width - 74))
+        let text = item.displayText
+        let bubbleWidth = min(380, max(260, width - 74))
         let bodyWidth = bubbleWidth - 22
         let bodyHeight = text.boundingRect(
             with: NSSize(width: bodyWidth, height: 1000),
@@ -795,7 +1130,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
 
     @objc private func replayTapped() {
         if let item = store.readState()?.last {
-            expandedItemID = item.id ?? item.file ?? item.created_at
+            expandedItemID = item.stableKey
             rebuildInbox()
         }
         onReplayLast?()
@@ -807,6 +1142,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     @objc private func openNotificationSettingsTapped() { onOpenNotificationSettings?() }
     @objc private func openPronunciationsTapped() { onOpenPronunciations?() }
     @objc private func openFolderTapped() { onOpenFolder?() }
+    @objc private func openDashboardTapped() { onOpenDashboard?() }
+    @objc private func archiveTapped() { onArchiveItem?(expandedItemID ?? store.readState()?.last?.id) }
     @objc private func clearInboxTapped() { onClearInbox?() }
     @objc private func quitTapped() { onQuit?() }
 }
@@ -816,10 +1153,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var panel: NSPanel!
     private var popoverController: VoicePopoverController!
+    private var dashboardWindow: NSWindow?
+    private var dashboardController: DashboardViewController?
     private var timer: Timer?
     private var lastSeenStateKey: String?
+    private var lastStorageSignature: String?
     private var audioPlayer: AVAudioPlayer?
     private var playingFile: String?
+    private var unreadCount = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -858,6 +1199,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         popoverController.onOpenNotificationSettings = { [weak self] in self?.openNotificationSettings() }
         popoverController.onOpenPronunciations = { [weak self] in self?.openPronunciations() }
         popoverController.onOpenFolder = { [weak self] in self?.openFolder() }
+        popoverController.onOpenDashboard = { [weak self] in self?.showDashboard() }
+        popoverController.onArchiveItem = { [weak self] key in self?.archiveItem(key) }
         popoverController.onClearInbox = { [weak self] in self?.clearInbox() }
         popoverController.onQuit = { NSApp.terminate(nil) }
         popoverController.onConfigChanged = { [weak self] in self?.updateIcon() }
@@ -889,11 +1232,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func refresh(initial: Bool) {
+        let signature = store.storageSignature()
+        let shouldReload = initial || signature != lastStorageSignature
+        lastStorageSignature = signature
+
         if let command = store.consumeCommand() {
             handle(command: command)
+            popoverController.reload()
+            return
         }
-        updateIcon()
-        popoverController.reload()
+
+        if shouldReload {
+            updateIcon()
+            popoverController.reload()
+            dashboardController?.reload()
+        }
         guard let item = store.readState()?.last, let id = item.id else { return }
         let key = "\(id):\(item.status ?? "")"
         if initial {
@@ -902,7 +1255,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         if key != lastSeenStateKey {
             lastSeenStateKey = key
-            if item.mode == "notify" && item.status == "ready" {
+            if item.status == "ready" {
+                if !panel.isVisible {
+                    unreadCount += 1
+                    updateIcon()
+                }
+                switch item.mode {
+                case "autoplay":
+                    if let file = item.file, file != playingFile {
+                        replay(file: file)
+                    }
+                case "notify":
+                    deliverNotification(for: item)
+                default:
+                    break
+                }
+            } else if item.status == "failed" {
                 deliverNotification(for: item)
             }
         }
@@ -935,6 +1303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Agent Voice") {
             image.isTemplate = true
             button.image = image
+            button.title = unreadCount > 0 ? " \(min(unreadCount, 99))" : ""
             button.toolTip = "Agent Voice Bar: \(config.mode.capitalized)"
         }
     }
@@ -954,11 +1323,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             panel.deminiaturize(nil)
         }
         positionPanelNearStatusItem()
+        unreadCount = 0
+        updateIcon()
         NSApp.activate(ignoringOtherApps: true)
         panel.orderFrontRegardless()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.panel.makeKeyAndOrderFront(nil)
         }
+    }
+
+    private func showDashboard() {
+        if dashboardWindow == nil {
+            let controller = DashboardViewController(store: store)
+            controller.onReplayFile = { [weak self] file in self?.replay(file: file) }
+            controller.onStop = { [weak self] in self?.stopPlayback() }
+            controller.onArchiveItem = { [weak self] key in self?.archiveItem(key) }
+            controller.onClearInbox = { [weak self] in self?.clearInbox() }
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 980, height: 680),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "Agent Voice Bar Dashboard"
+            window.minSize = NSSize(width: 760, height: 520)
+            window.backgroundColor = Theme.background
+            window.isReleasedWhenClosed = false
+            window.contentViewController = controller
+            dashboardController = controller
+            dashboardWindow = window
+        }
+        dashboardController?.reload()
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        dashboardWindow?.center()
+        dashboardWindow?.makeKeyAndOrderFront(nil)
     }
 
     private func positionPanelNearStatusItem() {
@@ -992,8 +1391,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func deliverNativeNotification(for item: VoiceItem) {
         let content = UNMutableNotificationContent()
-        content.title = "Agent Voice Bar"
-        content.subtitle = "Voice message ready"
+        content.title = notificationTitle(for: item)
+        content.subtitle = item.source ?? "Agent Voice Bar"
         content.body = item.text ?? "A new voice message is ready."
         content.sound = .default
         content.categoryIdentifier = "VOICE_MESSAGE"
@@ -1020,6 +1419,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             created_at: now,
             ready_at: now,
             source: "app",
+            title: "Notification test",
+            priority: "normal",
             mode: "notify",
             status: "ready",
             voice: "Chelsie",
@@ -1049,7 +1450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         process.launchPath = executable
         process.arguments = [
             "-title", "Agent Voice Bar",
-            "-subtitle", "Voice message ready",
+            "-subtitle", notificationTitle(for: item),
             "-message", String((item.text ?? "A new voice message is ready.").prefix(240)),
             "-sound", "Glass",
             "-group", item.id ?? "codex-voice-bar",
@@ -1063,6 +1464,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             NSLog("Agent Voice Bar terminal-notifier error: \(error.localizedDescription)")
             return false
         }
+    }
+
+    private func notificationTitle(for item: VoiceItem) -> String {
+        let title = (item.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty { return title }
+        if item.status == "failed" { return "Message failed" }
+        return "Voice message ready"
     }
 
     private func requestNotifications() {
@@ -1093,11 +1501,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             audioPlayer = player
             playingFile = file
             popoverController.setPlayingFile(file)
+            dashboardController?.setPlayingFile(file)
             player.play()
         } catch {
             audioPlayer = nil
             playingFile = nil
             popoverController.setPlayingFile(nil)
+            dashboardController?.setPlayingFile(nil)
         }
     }
 
@@ -1106,6 +1516,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         audioPlayer = nil
         playingFile = nil
         popoverController.setPlayingFile(nil)
+        dashboardController?.setPlayingFile(nil)
     }
 
     private func setReplayRate(_ rate: Float) {
@@ -1122,6 +1533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         audioPlayer = nil
         playingFile = nil
         popoverController.setPlayingFile(nil)
+        dashboardController?.setPlayingFile(nil)
     }
 
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
@@ -1129,6 +1541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         audioPlayer = nil
         playingFile = nil
         popoverController.setPlayingFile(nil)
+        dashboardController?.setPlayingFile(nil)
     }
 
     private func openPronunciations() {
@@ -1156,8 +1569,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func clearInbox() {
+        stopPlayback()
         store.clearInbox()
+        lastSeenStateKey = nil
+        lastStorageSignature = nil
         popoverController.reload()
+        dashboardController?.reload()
+    }
+
+    private func archiveItem(_ key: String?) {
+        stopPlayback()
+        store.archiveItem(matching: key)
+        lastSeenStateKey = nil
+        lastStorageSignature = nil
+        popoverController.reload()
+        dashboardController?.reload()
     }
 
     private func speakTestLine() {
@@ -1168,6 +1594,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             "params": [
                 "name": "speak_text",
                 "arguments": [
+                    "source": "Agent Voice Bar",
+                    "title": "Local test message",
+                    "priority": "normal",
                     "text": "Agent Voice Bar is online. The inbox, clickable replay bubbles, notification mode, and speed controls are ready."
                 ],
             ],

@@ -6,11 +6,22 @@ replayable inbox.
 
 Planned directions:
 
-- Full dashboard window with richer history, filters, search, and message detail.
-- Menu bar mini mode plus an "Open Dashboard" flow.
-- Local model picker with install/status checks for Qwen, Kokoro, Chatterbox, and
-  other on-device TTS engines.
+Near-term:
+
+- App-owned playback, notifications, unread state, and stable inbox reloads.
+- Message metadata: title, source agent, priority, status, and generated audio.
+- Read/unread, pin, delete, and filters for the menu-bar inbox.
+- Full message detail with original prompt, speech-normalized text, render errors,
+  and replay controls.
+- Notification policies for questions, blocked states, failures, and urgent items.
+
+Next:
+
+- Richer dashboard filters, search, saved views, and per-agent channels.
+- Menu bar mini mode plus a more compact "Open Dashboard" flow.
 - Per-agent voices, channels, and notification rules.
 - Better remote setup helpers for reverse SSH tunnels and LaunchAgents.
+- Local model picker with install/status checks for Qwen, Kokoro, Chatterbox, and
+  other on-device TTS engines.
 - Optional STT pairing for two-way local voice workflows.
 - Signed/notarized beta builds.
