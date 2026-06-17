@@ -425,6 +425,55 @@ final class InboxDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
 
+final class EmptyStateView: NSView {
+    init(symbolName: String, title: String, message: String, width: CGFloat) {
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: 156))
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let icon = NSImageView(image: NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) ?? NSImage())
+        icon.contentTintColor = Theme.muted
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 28, weight: .regular)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 38),
+            icon.heightAnchor.constraint(equalToConstant: 38),
+        ])
+
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.textColor = Theme.text
+        titleLabel.alignment = .center
+
+        let messageLabel = NSTextField(wrappingLabelWithString: message)
+        messageLabel.font = .systemFont(ofSize: 12.2, weight: .medium)
+        messageLabel.textColor = Theme.muted
+        messageLabel.alignment = .center
+        messageLabel.maximumNumberOfLines = 3
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
+        messageLabel.widthAnchor.constraint(lessThanOrEqualToConstant: max(220, width - 72)).isActive = true
+
+        stack.addArrangedSubview(icon)
+        stack.addArrangedSubview(titleLabel)
+        stack.addArrangedSubview(messageLabel)
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
 final class BubbleRow: NSView {
     let item: VoiceItem
 
@@ -859,10 +908,13 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         resultCountLabel.stringValue = countText(shown: items.count, total: allItems.count)
         let width: CGFloat = max(480, listScrollView.contentSize.width)
         if items.isEmpty {
-            let empty = NSTextField(wrappingLabelWithString: emptyDashboardText())
-            empty.textColor = Theme.muted
-            empty.font = .systemFont(ofSize: 13)
-            empty.frame = NSRect(x: 12, y: 16, width: width - 24, height: 54)
+            let empty = EmptyStateView(
+                symbolName: emptyDashboardSymbol(),
+                title: emptyDashboardTitle(),
+                message: emptyDashboardText(),
+                width: width
+            )
+            empty.frame = NSRect(x: 0, y: max(24, (listScrollView.contentSize.height - 156) / 2), width: width, height: 156)
             listDocument.addSubview(empty)
             listDocument.frame = NSRect(x: 0, y: 0, width: width, height: max(560, listScrollView.contentSize.height))
             return
@@ -897,8 +949,8 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         let item = filteredItems(store.recentItems(limit: 0)).first { $0.stableKey == selectedItemKey }
         guard let item else {
             detailTitle.stringValue = "Select a message"
-            detailMeta.stringValue = "Agent inbox"
-            detailText.string = ""
+            detailMeta.stringValue = "Message detail"
+            detailText.string = "Choose a message from the inbox to read the full text, inspect playback history, or replay the local audio."
             replayButton.isEnabled = false
             archiveButton.isEnabled = false
             return
@@ -987,14 +1039,34 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         return shown == total ? "\(total) \(word)" : "\(shown) shown / \(total) \(word)"
     }
 
-    private func emptyDashboardText() -> String {
+    private func emptyDashboardSymbol() -> String {
         if !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "No messages match this search."
+            return "magnifyingglass"
         }
         if (sourcePopup.selectedItem?.title ?? "All Sources") != "All Sources" {
-            return "No messages from this source yet."
+            return "tray"
         }
-        return "No agent messages yet. Incoming MCP speech requests will appear here."
+        return "waveform.and.bubble.left"
+    }
+
+    private func emptyDashboardTitle() -> String {
+        if !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "No Matching Messages"
+        }
+        if (sourcePopup.selectedItem?.title ?? "All Sources") != "All Sources" {
+            return "No Messages From This Source"
+        }
+        return "Inbox Is Ready"
+    }
+
+    private func emptyDashboardText() -> String {
+        if !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Try a different search or clear the field to return to the full inbox."
+        }
+        if (sourcePopup.selectedItem?.title ?? "All Sources") != "All Sources" {
+            return "When this source sends an agent update, it will appear here."
+        }
+        return "Incoming MCP speech requests will appear here with replay, archive, and local readout history."
     }
 
     private func updateSourceRuleControl() {
