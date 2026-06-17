@@ -564,6 +564,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
     private let sourcePopup = NSPopUpButton()
     private let sourceRuleControl = NSSegmentedControl(labels: ["Follow", "Speak", "Notify", "DND"], trackingMode: .selectOne, target: nil, action: nil)
     private let resultCountLabel = NSTextField(labelWithString: "0 messages")
+    private let playbackStatusLabel = NSTextField(labelWithString: "Playback idle")
     private let detailTitle = NSTextField(labelWithString: "Select a message")
     private let detailMeta = NSTextField(labelWithString: "Agent inbox")
     private let detailText = NSTextView()
@@ -622,8 +623,11 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         let subtitle = NSTextField(labelWithString: "Agent inbox, local speech rendering, replay history")
         subtitle.font = .systemFont(ofSize: 13, weight: .medium)
         subtitle.textColor = Theme.muted
+        playbackStatusLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        playbackStatusLabel.textColor = Theme.muted
         titleStack.addArrangedSubview(title)
         titleStack.addArrangedSubview(subtitle)
+        titleStack.addArrangedSubview(playbackStatusLabel)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         for button in [replayButton, skipButton, stopButton, archiveButton, clearButton, refreshButton] {
@@ -746,6 +750,13 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         }
         rebuildList()
         updateDetail()
+    }
+
+    func setPlaybackSummary(_ text: String, color: NSColor, isPlaying: Bool, hasQueue: Bool) {
+        playbackStatusLabel.stringValue = text
+        playbackStatusLabel.textColor = color
+        skipButton.isEnabled = isPlaying
+        stopButton.isEnabled = isPlaying || hasQueue
     }
 
     func reload() {
@@ -995,6 +1006,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     private let notificationLabel = NSTextField(labelWithString: "Notifications: checking")
     private let controlsTitle = NSTextField(labelWithString: "Voice Tuning")
     private let inboxCountLabel = NSTextField(labelWithString: "0 messages")
+    private let playbackStatusLabel = NSTextField(labelWithString: "Playback idle")
     private let notificationTitleLabel = NSTextField(labelWithString: "System")
     private let searchField = NSSearchField()
     private let sourcePopup = NSPopUpButton()
@@ -1128,8 +1140,11 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         inboxTitle.textColor = Theme.text
         inboxCountLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
         inboxCountLabel.textColor = Theme.muted
+        playbackStatusLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        playbackStatusLabel.textColor = Theme.muted
         inboxTitleStack.addArrangedSubview(inboxTitle)
         inboxTitleStack.addArrangedSubview(inboxCountLabel)
+        inboxTitleStack.addArrangedSubview(playbackStatusLabel)
         let inboxSpacer = NSView()
         inboxSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         dashboardButton.bezelStyle = .rounded
@@ -1394,6 +1409,13 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
             expandedItemID = item.stableKey
         }
         rebuildInbox()
+    }
+
+    func setPlaybackSummary(_ text: String, color: NSColor, isPlaying: Bool, hasQueue: Bool) {
+        playbackStatusLabel.stringValue = text
+        playbackStatusLabel.textColor = color
+        skipButton.isEnabled = isPlaying
+        stopButton.isEnabled = isPlaying || hasQueue
     }
 
     func reload() {
@@ -1795,9 +1817,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         configureNotifications(requestPermission: true)
         configurePopover()
         configureStatusItem()
+        updatePlaybackSummary()
         refresh(initial: true)
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.refresh(initial: false)
+            self?.updatePlaybackSummary()
         }
     }
 
@@ -2268,6 +2292,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return "Last playback: \(event.event) / \(title) / \(event.at)\(detail)"
     }
 
+    private func playbackSummaryText() -> (String, NSColor, Bool, Bool) {
+        let isPlaying = playingFile != nil
+        let hasQueue = !autoplayQueue.isEmpty
+        if let playingFile {
+            let suffix = hasQueue ? " / Up next: \(autoplayQueue.count)" : ""
+            return ("Now: \(titleForFile(playingFile))\(suffix)", Theme.playing, isPlaying, hasQueue)
+        }
+        if hasQueue {
+            return ("Queued: \(autoplayQueue.count)", Theme.amber, isPlaying, hasQueue)
+        }
+        return ("Playback idle", Theme.muted, isPlaying, hasQueue)
+    }
+
+    private func updatePlaybackSummary() {
+        let summary = playbackSummaryText()
+        popoverController?.setPlaybackSummary(summary.0, color: summary.1, isPlaying: summary.2, hasQueue: summary.3)
+        dashboardController?.setPlaybackSummary(summary.0, color: summary.1, isPlaying: summary.2, hasQueue: summary.3)
+    }
+
+    private func titleForFile(_ file: String) -> String {
+        if let item = store.recentItems(limit: 0).first(where: { $0.file == file }) {
+            return item.displayTitle
+        }
+        return URL(fileURLWithPath: file).lastPathComponent
+    }
+
     private func terminalNotifierPath() -> String? {
         [
             "/opt/homebrew/bin/terminal-notifier",
@@ -2304,6 +2354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         queuedAutoplayFiles.insert(file)
         recordPlaybackEvent("queued_autoplay", file: file, detail: "Waiting for prior readouts to finish")
         popoverController.setNotificationStatus("Playback: queued \(autoplayQueue.count)", color: Theme.amber)
+        updatePlaybackSummary()
         playNextAutoplayIfIdle()
     }
 
@@ -2311,6 +2362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard audioPlayer == nil, !autoplayQueue.isEmpty else { return }
         let next = autoplayQueue.removeFirst()
         queuedAutoplayFiles.remove(next)
+        updatePlaybackSummary()
         play(file: next, source: "autoplay")
     }
 
@@ -2321,6 +2373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for file in queued {
             recordPlaybackEvent("skipped", file: file, detail: reason)
         }
+        updatePlaybackSummary()
     }
 
     private func play(file: String, source: String) {
@@ -2368,6 +2421,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             dashboardController?.setPlayingFile(file)
             popoverController.setNotificationStatus("Playback: playing", color: Theme.playing)
             recordPlaybackEvent("started", file: file, detail: nil, duration: player.duration, rate: player.rate)
+            updatePlaybackSummary()
             schedulePlaybackWatchdog(for: file, player: player)
         } catch {
             recordPlaybackEvent("failed_load", file: file, detail: error.localizedDescription)
@@ -2390,6 +2444,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             recordPlaybackEvent("stopped", file: file, detail: "Stopped by user")
         }
         popoverController.setNotificationStatus("Playback: stopped", color: Theme.muted)
+        updatePlaybackSummary()
     }
 
     private func skipPlayback() {
@@ -2402,6 +2457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         recordPlaybackEvent("skipped", file: file, detail: "Skipped to next queued readout", duration: audioPlayer?.duration, rate: audioPlayer?.rate)
         clearPlaybackState()
         popoverController.setNotificationStatus("Playback: skipped", color: Theme.amber)
+        updatePlaybackSummary()
         playNextAutoplayIfIdle()
     }
 
@@ -2439,6 +2495,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 self.recordPlaybackEvent("watchdog_finished", file: file, detail: "Playback watchdog cleared stale state", duration: player.duration, rate: player.rate)
                 self.clearPlaybackState()
                 self.popoverController.setNotificationStatus("Playback: finished", color: Theme.green)
+                self.updatePlaybackSummary()
                 self.playNextAutoplayIfIdle()
             } else {
                 self.schedulePlaybackWatchdog(for: file, player: player)
@@ -2453,6 +2510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         playingFile = nil
         popoverController.setPlayingFile(nil)
         dashboardController?.setPlayingFile(nil)
+        updatePlaybackSummary()
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -2463,6 +2521,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         clearPlaybackState()
         popoverController.setNotificationStatus(flag ? "Playback: finished" : "Playback: stopped", color: flag ? Theme.green : Theme.muted)
+        updatePlaybackSummary()
         playNextAutoplayIfIdle()
     }
 
@@ -2474,6 +2533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         clearPlaybackState()
         popoverController.setNotificationStatus("Playback: decode failed", color: .systemRed)
+        updatePlaybackSummary()
         playNextAutoplayIfIdle()
     }
 
