@@ -671,6 +671,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
     private let playbackStatusLabel = NSTextField(labelWithString: "Playback idle")
     private let detailTitle = NSTextField(labelWithString: "Select a message")
     private let detailMeta = NSTextField(labelWithString: "Agent inbox")
+    private let detailPlayback = NSTextField(labelWithString: "Playback details appear here.")
     private let detailText = NSTextView()
     private let replayButton = NSButton(title: "Replay", target: nil, action: nil)
     private let skipButton = NSButton(title: "Skip", target: nil, action: nil)
@@ -804,7 +805,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         listScrollView.drawsBackground = false
         listScrollView.borderType = .noBorder
         let listPanel = panel(listScrollView)
-        listPanel.widthAnchor.constraint(equalToConstant: 510).isActive = true
+        listPanel.widthAnchor.constraint(equalToConstant: 460).isActive = true
         body.addArrangedSubview(listPanel)
 
         let detailStack = NSStackView()
@@ -816,6 +817,10 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         detailTitle.maximumNumberOfLines = 2
         detailMeta.font = .systemFont(ofSize: 11.5, weight: .medium)
         detailMeta.textColor = Theme.muted
+        detailPlayback.font = .systemFont(ofSize: 11.5, weight: .medium)
+        detailPlayback.textColor = Theme.muted
+        detailPlayback.maximumNumberOfLines = 2
+        detailPlayback.lineBreakMode = .byTruncatingTail
         detailText.isEditable = false
         detailText.drawsBackground = false
         detailText.textColor = Theme.text
@@ -843,6 +848,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         detailHeader.addArrangedSubview(replayButton)
         detailHeader.addArrangedSubview(archiveButton)
         detailStack.addArrangedSubview(detailHeader)
+        detailStack.addArrangedSubview(detailPlayback)
         detailStack.addArrangedSubview(detailScroll)
         let detailPanel = panel(detailStack)
         detailPanel.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -950,6 +956,8 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         guard let item else {
             detailTitle.stringValue = "Select a message"
             detailMeta.stringValue = "Message detail"
+            detailPlayback.stringValue = "Playback: no message selected"
+            detailPlayback.toolTip = nil
             detailText.string = "Choose a message from the inbox to read the full text, inspect playback history, or replay the local audio."
             replayButton.isEnabled = false
             archiveButton.isEnabled = false
@@ -961,11 +969,14 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         let mode = displayModeName(item.mode ?? "message")
         let created = item.created_at ?? "unknown time"
         detailMeta.stringValue = "\(source)  •  \(mode)  •  \(status)  •  \(created)"
-        if let playbackDetail = playbackDetailText(store.latestPlaybackEvent(for: item)) {
-            detailText.string = "\(item.displayBodyText)\n\nPlayback\n\(playbackDetail)"
+        if let event = store.latestPlaybackEvent(for: item) {
+            detailPlayback.stringValue = "Playback: \(playbackFooterText(event) ?? displayPlaybackEvent(event.event))"
+            detailPlayback.toolTip = playbackDetailText(event)
         } else {
-            detailText.string = item.displayBodyText
+            detailPlayback.stringValue = item.file == nil ? "Playback: notification-only message" : "Playback: no local playback recorded"
+            detailPlayback.toolTip = nil
         }
+        detailText.string = item.displayBodyText
         replayButton.isEnabled = item.file != nil
         archiveButton.isEnabled = true
     }
