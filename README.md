@@ -29,6 +29,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - inbox search and source/channel filtering in the mini app and Dashboard
 - per-source delivery rules for Speak/Notify/DND behavior
 - expandable full-message bubbles during replay
+- playback audit trail for local audio start/finish/failure events
 - unread menu-bar count and archive/clear actions
 - Setup Doctor report for notification, fallback, backend, and mode checks
 - macOS notification fallback through `terminal-notifier`
@@ -62,6 +63,8 @@ Use it for:
   DND.
 - Keeps playback under app control so overlapping speech is avoidable.
 - Clears stale playback state if macOS audio startup or finish callbacks misbehave.
+- Records local playback attempts so Doctor can show whether audio started,
+  finished, stopped, or failed.
 - Works with remote agents through a reverse SSH tunnel to your Mac.
 
 ## Architecture
@@ -204,6 +207,7 @@ Important files:
 - `rules.json`: optional per-source delivery rules
 - `pronunciations.json`: custom pronunciation replacements
 - `queue.jsonl`: inbox history
+- `playback.jsonl`: local audio start/finish/failure events
 - `state.json`: latest item and app state
 - `out/`: generated WAV files
 

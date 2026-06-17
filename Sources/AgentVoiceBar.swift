@@ -110,6 +110,17 @@ struct VoiceState: Codable {
     var config: VoiceConfig?
 }
 
+struct PlaybackEvent: Codable {
+    var at: String
+    var event: String
+    var file: String?
+    var source: String?
+    var title: String?
+    var detail: String?
+    var duration: Double?
+    var rate: Float?
+}
+
 struct VoiceCommand: Codable {
     var command: String
     var text: String?
@@ -122,6 +133,7 @@ final class VoiceStore {
     let stateURL: URL
     let pronunciationsURL: URL
     let queueURL: URL
+    let playbackURL: URL
     let commandURL: URL
 
     init() {
@@ -132,6 +144,7 @@ final class VoiceStore {
         stateURL = appDir.appendingPathComponent("state.json")
         pronunciationsURL = appDir.appendingPathComponent("pronunciations.json")
         queueURL = appDir.appendingPathComponent("queue.jsonl")
+        playbackURL = appDir.appendingPathComponent("playback.jsonl")
         commandURL = appDir.appendingPathComponent("command.json")
     }
 
@@ -194,7 +207,7 @@ final class VoiceStore {
     }
 
     func storageSignature() -> String {
-        let urls = [configURL, rulesURL, stateURL, queueURL, commandURL]
+        let urls = [configURL, rulesURL, stateURL, queueURL, playbackURL, commandURL]
         return urls.map { url in
             let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0
             return "\(url.lastPathComponent):\(modified)"
@@ -218,6 +231,36 @@ final class VoiceStore {
         }
         let selectedOrder = limit > 0 ? Array(order.suffix(limit)) : order
         return selectedOrder.compactMap { byID[$0] }.reversed()
+    }
+
+    func appendPlaybackEvent(_ event: PlaybackEvent) {
+        try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(event),
+              let line = String(data: data, encoding: .utf8) else {
+            return
+        }
+        if FileManager.default.fileExists(atPath: playbackURL.path),
+           let handle = try? FileHandle(forWritingTo: playbackURL) {
+            handle.seekToEndOfFile()
+            if let bytes = "\(line)\n".data(using: .utf8) {
+                handle.write(bytes)
+            }
+            try? handle.close()
+        } else {
+            try? "\(line)\n".write(to: playbackURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    func recentPlaybackEvents(limit: Int = 20) -> [PlaybackEvent] {
+        guard let content = try? String(contentsOf: playbackURL, encoding: .utf8) else { return [] }
+        let lines = content.split(separator: "\n")
+        let selected = limit > 0 ? Array(lines.suffix(limit)) : lines
+        return selected.compactMap { line in
+            guard let data = String(line).data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(PlaybackEvent.self, from: data)
+        }.reversed()
     }
 
     func clearInbox() {
@@ -2013,6 +2056,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 DispatchQueue.main.async {
                     let config = self.store.readConfig()
                     let ruleCount = self.store.readRules().sources.count
+                    let playbackLine = self.latestPlaybackLine()
                     let mode = self.displayModeName(config.mode)
                     let text = [
                         "Delivery: \(mode)",
@@ -2020,6 +2064,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         "Render speed: \(config.speed)x",
                         "Talk speed: \(config.replay_speed)x",
                         "Source rules: \(ruleCount)",
+                        playbackLine,
                         notificationLine,
                         terminalNotifierLine,
                         backendLine,
@@ -2100,6 +2145,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    private func latestPlaybackLine() -> String {
+        guard let event = store.recentPlaybackEvents(limit: 1).first else {
+            return "Last playback: none recorded"
+        }
+        let title = event.title?.isEmpty == false ? event.title! : URL(fileURLWithPath: event.file ?? "").lastPathComponent
+        let detail = event.detail?.isEmpty == false ? " - \(event.detail!)" : ""
+        return "Last playback: \(event.event) / \(title) / \(event.at)\(detail)"
+    }
+
     private func terminalNotifierPath() -> String? {
         [
             "/opt/homebrew/bin/terminal-notifier",
@@ -2136,6 +2190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard FileManager.default.fileExists(atPath: file) else {
             clearPlaybackState()
             popoverController.setNotificationStatus("Playback: missing file", color: .systemRed)
+            recordPlaybackEvent("missing_file", file: file, detail: "Audio file was missing")
             appendAppMessage(title: "Playback failed", text: "Audio file was missing:\n\(file)", priority: "high")
             return
         }
@@ -2148,6 +2203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             player.prepareToPlay()
             audioPlayer = player
             guard player.play() else {
+                recordPlaybackEvent("failed_start", file: file, detail: "AVAudioPlayer.play() returned false", duration: player.duration, rate: player.rate)
                 clearPlaybackState()
                 popoverController.setNotificationStatus("Playback: could not start", color: .systemRed)
                 return
@@ -2156,16 +2212,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             popoverController.setPlayingFile(file)
             dashboardController?.setPlayingFile(file)
             popoverController.setNotificationStatus("Playback: playing", color: Theme.playing)
+            recordPlaybackEvent("started", file: file, detail: nil, duration: player.duration, rate: player.rate)
             schedulePlaybackWatchdog(for: file, player: player)
         } catch {
+            recordPlaybackEvent("failed_load", file: file, detail: error.localizedDescription)
             clearPlaybackState()
             popoverController.setNotificationStatus("Playback: \(error.localizedDescription)", color: .systemRed)
         }
     }
 
     private func stopPlayback() {
+        let file = playingFile
         audioPlayer?.stop()
         clearPlaybackState()
+        if let file {
+            recordPlaybackEvent("stopped", file: file, detail: "Stopped by user")
+        }
         popoverController.setNotificationStatus("Playback: stopped", color: Theme.muted)
     }
 
@@ -2200,6 +2262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                   self.audioPlayer === player,
                   self.playingFile == file else { return }
             if !player.isPlaying {
+                self.recordPlaybackEvent("watchdog_finished", file: file, detail: "Playback watchdog cleared stale state", duration: player.duration, rate: player.rate)
                 self.clearPlaybackState()
                 self.popoverController.setNotificationStatus("Playback: finished", color: Theme.green)
             } else {
@@ -2219,14 +2282,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         guard audioPlayer === player else { return }
+        let file = playingFile
+        if let file {
+            recordPlaybackEvent(flag ? "finished" : "stopped", file: file, detail: flag ? nil : "Playback ended unsuccessfully", duration: player.duration, rate: player.rate)
+        }
         clearPlaybackState()
         popoverController.setNotificationStatus(flag ? "Playback: finished" : "Playback: stopped", color: flag ? Theme.green : Theme.muted)
     }
 
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         guard audioPlayer === player else { return }
+        let file = playingFile
+        if let file {
+            recordPlaybackEvent("decode_failed", file: file, detail: error?.localizedDescription, duration: player.duration, rate: player.rate)
+        }
         clearPlaybackState()
         popoverController.setNotificationStatus("Playback: decode failed", color: .systemRed)
+    }
+
+    private func recordPlaybackEvent(_ name: String, file: String?, detail: String?, duration: Double? = nil, rate: Float? = nil) {
+        let item = file.flatMap { path in
+            store.recentItems(limit: 0).first { $0.file == path }
+        }
+        let event = PlaybackEvent(
+            at: ISO8601DateFormatter().string(from: Date()),
+            event: name,
+            file: file,
+            source: item?.source,
+            title: item?.displayTitle,
+            detail: detail,
+            duration: duration,
+            rate: rate
+        )
+        store.appendPlaybackEvent(event)
+        lastStorageSignature = nil
     }
 
     private func openPronunciations() {
