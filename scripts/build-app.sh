@@ -14,6 +14,7 @@ mkdir -p "$MACOS" "$RESOURCES"
 swiftc \
   -O \
   -framework AppKit \
+  -framework AVFoundation \
   -framework Foundation \
   -framework UserNotifications \
   "$ROOT/Sources/AgentVoiceBar.swift" \
@@ -26,6 +27,8 @@ cp "$ROOT/Assets/AgentVoiceBarIcon.png" "$RESOURCES/AgentVoiceBarIcon.png"
 dot_clean "$APP" >/dev/null 2>&1 || true
 xattr -cr "$APP" || true
 find "$APP" -exec xattr -c {} \; >/dev/null 2>&1 || true
+xattr -d com.apple.FinderInfo "$APP" >/dev/null 2>&1 || true
+xattr -d 'com.apple.fileprovider.fpfs#P' "$APP" >/dev/null 2>&1 || true
 codesign --force --deep --sign - "$APP" >/dev/null
 
 echo "$APP"

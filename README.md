@@ -20,7 +20,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - local Qwen/MLX TTS backend
 - MCP `speak_text` tool
 - notify/autoplay/silent modes
-- direct voice, speed, energy, and variety controls
+- direct voice, real talk-speed, model-speed, energy, and variety controls
 - replayable scrolling inbox
 - expandable full-message bubbles during replay
 - macOS notification fallback through `terminal-notifier`
@@ -155,7 +155,7 @@ Every message is stored locally in:
 
 Important files:
 
-- `config.json`: mode, voice, speed, generation settings
+- `config.json`: mode, voice, real talk-speed, model-speed, generation settings
 - `pronunciations.json`: custom pronunciation replacements
 - `queue.jsonl`: inbox history
 - `state.json`: latest item and app state

@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
     "mode": "autoplay",
     "voice": VOICE,
     "speed": SPEED,
+    "replay_speed": "1.00",
     "temperature": TEMPERATURE,
     "top_p": TOP_P,
     "max_chars": 1200,
@@ -249,7 +250,20 @@ def generate_and_deliver(item):
     publish_state(item)
 
     if item["mode"] == "autoplay":
-        subprocess.Popen(["/usr/bin/afplay", str(wav_path)])
+        play_audio(wav_path)
+
+
+def replay_rate():
+    config = load_config()
+    try:
+        value = float(config.get("replay_speed") or 1.0)
+    except (TypeError, ValueError):
+        value = 1.0
+    return str(max(0.5, min(2.0, value)))
+
+
+def play_audio(wav_path):
+    subprocess.Popen(["/usr/bin/afplay", "-r", replay_rate(), "-q", "1", str(wav_path)])
 
 
 def synthesize_and_play(text):
@@ -290,7 +304,7 @@ def synthesize_and_play(text):
 
     if wav_path.exists():
         if mode == "autoplay":
-            subprocess.Popen(["/usr/bin/afplay", str(wav_path)])
+            play_audio(wav_path)
         return {
             "accepted": True,
             "spoken": mode == "autoplay",

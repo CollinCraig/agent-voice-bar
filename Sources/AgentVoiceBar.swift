@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import UserNotifications
 
@@ -19,10 +20,34 @@ enum Theme {
 struct VoiceConfig: Codable {
     var mode: String = "autoplay"
     var speed: String = "1.35"
+    var replay_speed: String = "1.00"
     var temperature: String = "0.45"
     var top_p: String = "0.85"
     var voice: String = "Chelsie"
     var max_chars: Int = 1200
+
+    init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case speed
+        case replay_speed
+        case temperature
+        case top_p
+        case voice
+        case max_chars
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try values.decodeIfPresent(String.self, forKey: .mode) ?? "autoplay"
+        speed = try values.decodeIfPresent(String.self, forKey: .speed) ?? "1.35"
+        replay_speed = try values.decodeIfPresent(String.self, forKey: .replay_speed) ?? "1.00"
+        temperature = try values.decodeIfPresent(String.self, forKey: .temperature) ?? "0.45"
+        top_p = try values.decodeIfPresent(String.self, forKey: .top_p) ?? "0.85"
+        voice = try values.decodeIfPresent(String.self, forKey: .voice) ?? "Chelsie"
+        max_chars = try values.decodeIfPresent(Int.self, forKey: .max_chars) ?? 1200
+    }
 }
 
 struct VoiceItem: Codable {
@@ -300,6 +325,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     var onClearInbox: (() -> Void)?
     var onQuit: (() -> Void)?
     var onConfigChanged: (() -> Void)?
+    var onReplayRateChanged: ((Float) -> Void)?
     private var playingFile: String?
     private var expandedItemID: String?
 
@@ -307,6 +333,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     private let voiceField = NSTextField(string: "Chelsie")
     private let speedSlider = NSSlider(value: 1.35, minValue: 1.00, maxValue: 1.65, target: nil, action: nil)
     private let speedValueLabel = NSTextField(labelWithString: "1.35x")
+    private let replaySpeedSlider = NSSlider(value: 1.00, minValue: 0.70, maxValue: 1.80, target: nil, action: nil)
+    private let replaySpeedValueLabel = NSTextField(labelWithString: "1.00x")
     private let temperatureSlider = NSSlider(value: 0.45, minValue: 0.20, maxValue: 0.80, target: nil, action: nil)
     private let temperatureValueLabel = NSTextField(labelWithString: "0.45")
     private let topPSlider = NSSlider(value: 0.85, minValue: 0.65, maxValue: 0.98, target: nil, action: nil)
@@ -419,7 +447,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         controls.spacing = 8
         controls.addArrangedSubview(labeledRow("Delivery", modeControl, labelWidth: 62))
         controls.addArrangedSubview(labeledRow("Voice", voiceField, labelWidth: 62))
-        controls.addArrangedSubview(sliderRow("Speed", speedSlider, speedValueLabel, labelWidth: 62))
+        controls.addArrangedSubview(sliderRow("Speed", replaySpeedSlider, replaySpeedValueLabel, labelWidth: 62))
+        controls.addArrangedSubview(sliderRow("Model", speedSlider, speedValueLabel, labelWidth: 62))
         controls.addArrangedSubview(sliderRow("Energy", temperatureSlider, temperatureValueLabel, labelWidth: 62))
         controls.addArrangedSubview(sliderRow("Variety", topPSlider, topPValueLabel, labelWidth: 62))
         root.addArrangedSubview(panel(controls, fill: false))
@@ -432,12 +461,13 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         voiceField.font = .systemFont(ofSize: 12.5, weight: .medium)
         voiceField.textColor = Theme.text
         voiceField.backgroundColor = Theme.elevated
-        for slider in [speedSlider, temperatureSlider, topPSlider] {
+        for slider in [speedSlider, replaySpeedSlider, temperatureSlider, topPSlider] {
             slider.isContinuous = true
             slider.controlSize = .small
             slider.target = self
         }
         speedSlider.action = #selector(speedSliderChanged)
+        replaySpeedSlider.action = #selector(replaySpeedSliderChanged)
         temperatureSlider.action = #selector(temperatureSliderChanged)
         topPSlider.action = #selector(topPSliderChanged)
 
@@ -603,6 +633,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
             voiceField.stringValue = config.voice
         }
         speedSlider.doubleValue = clampedDouble(config.speed, fallback: 1.35, min: 1.00, max: 1.65)
+        replaySpeedSlider.doubleValue = clampedDouble(config.replay_speed, fallback: 1.00, min: 0.70, max: 1.80)
         temperatureSlider.doubleValue = clampedDouble(config.temperature, fallback: 0.45, min: 0.20, max: 0.80)
         topPSlider.doubleValue = clampedDouble(config.top_p, fallback: 0.85, min: 0.65, max: 0.98)
         updateControlLabels()
@@ -715,6 +746,13 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         }
     }
 
+    @objc private func replaySpeedSliderChanged() {
+        writeSliderConfig { config in
+            config.replay_speed = format(replaySpeedSlider.doubleValue, digits: 2)
+        }
+        onReplayRateChanged?(Float(replaySpeedSlider.doubleValue))
+    }
+
     @objc private func temperatureSliderChanged() {
         writeSliderConfig { config in
             config.temperature = format(temperatureSlider.doubleValue, digits: 2)
@@ -737,6 +775,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
 
     private func updateControlLabels() {
         speedValueLabel.stringValue = "\(format(speedSlider.doubleValue, digits: 2))x"
+        replaySpeedValueLabel.stringValue = "\(format(replaySpeedSlider.doubleValue, digits: 2))x"
         temperatureValueLabel.stringValue = format(temperatureSlider.doubleValue, digits: 2)
         topPValueLabel.stringValue = format(topPSlider.doubleValue, digits: 2)
     }
@@ -772,14 +811,14 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     @objc private func quitTapped() { onQuit?() }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, AVAudioPlayerDelegate {
     private let store = VoiceStore()
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var panel: NSPanel!
     private var popoverController: VoicePopoverController!
     private var timer: Timer?
     private var lastSeenStateKey: String?
-    private var playbackProcess: Process?
+    private var audioPlayer: AVAudioPlayer?
     private var playingFile: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -822,6 +861,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         popoverController.onClearInbox = { [weak self] in self?.clearInbox() }
         popoverController.onQuit = { NSApp.terminate(nil) }
         popoverController.onConfigChanged = { [weak self] in self?.updateIcon() }
+        popoverController.onReplayRateChanged = { [weak self] rate in self?.setReplayRate(rate) }
         panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 720),
             styleMask: [.titled, .closable],
@@ -1044,32 +1084,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         stopPlayback()
 
-        let process = Process()
-        process.launchPath = "/usr/bin/afplay"
-        process.arguments = [file]
-        playbackProcess = process
-        playingFile = file
-        popoverController.setPlayingFile(file)
-        process.terminationHandler = { [weak self, weak process] _ in
-            DispatchQueue.main.async {
-                guard let self, self.playbackProcess === process else { return }
-                self.playbackProcess = nil
-                self.playingFile = nil
-                self.popoverController.setPlayingFile(nil)
-            }
-        }
         do {
-            try process.run()
+            let player = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: file))
+            player.enableRate = true
+            player.rate = currentReplayRate()
+            player.delegate = self
+            player.prepareToPlay()
+            audioPlayer = player
+            playingFile = file
+            popoverController.setPlayingFile(file)
+            player.play()
         } catch {
-            playbackProcess = nil
+            audioPlayer = nil
             playingFile = nil
             popoverController.setPlayingFile(nil)
         }
     }
 
     private func stopPlayback() {
-        playbackProcess?.terminate()
-        playbackProcess = nil
+        audioPlayer?.stop()
+        audioPlayer = nil
+        playingFile = nil
+        popoverController.setPlayingFile(nil)
+    }
+
+    private func setReplayRate(_ rate: Float) {
+        audioPlayer?.rate = max(0.5, min(2.0, rate))
+    }
+
+    private func currentReplayRate() -> Float {
+        let parsed = Float(store.readConfig().replay_speed) ?? 1.0
+        return max(0.5, min(2.0, parsed))
+    }
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        guard audioPlayer === player else { return }
+        audioPlayer = nil
+        playingFile = nil
+        popoverController.setPlayingFile(nil)
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        guard audioPlayer === player else { return }
+        audioPlayer = nil
         playingFile = nil
         popoverController.setPlayingFile(nil)
     }
