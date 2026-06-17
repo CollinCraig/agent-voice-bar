@@ -665,6 +665,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     private let topPValueLabel = NSTextField(labelWithString: "0.85")
     private let statusLabel = NSTextField(labelWithString: "Waiting for messages")
     private let notificationLabel = NSTextField(labelWithString: "Notifications: checking")
+    private let controlsTitle = NSTextField(labelWithString: "Voice & Delivery")
+    private let inboxCountLabel = NSTextField(labelWithString: "0 messages")
     private let inboxScrollView = NSScrollView()
     private let inboxDocument = InboxDocumentView()
     private let replayButton = NSButton(title: "Replay Last", target: nil, action: nil)
@@ -686,7 +688,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 720))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 820))
         view.wantsLayer = true
         view.layer?.backgroundColor = Theme.background.cgColor
     }
@@ -744,90 +746,40 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         header.addArrangedSubview(statusDot())
         root.addArrangedSubview(header)
 
-        statusLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
+        statusLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
         statusLabel.textColor = Theme.muted
-        root.addArrangedSubview(statusLabel)
-
-        let notifyRow = NSStackView()
-        notifyRow.orientation = .horizontal
-        notifyRow.alignment = .centerY
-        notifyRow.spacing = 8
-        notificationLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
-        notificationLabel.textColor = Theme.muted
-        let notifySpacer = NSView()
-        notifySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        notifyRow.addArrangedSubview(notificationLabel)
-        notifyRow.addArrangedSubview(notifySpacer)
-        for button in [requestNotificationsButton, testNotificationButton] {
-            button.bezelStyle = .rounded
-            notifyRow.addArrangedSubview(button)
-        }
-        requestNotificationsButton.target = self
-        requestNotificationsButton.action = #selector(requestNotificationsTapped)
-        testNotificationButton.target = self
-        testNotificationButton.action = #selector(testNotificationTapped)
-        root.addArrangedSubview(panel(notifyRow, fill: false))
-
-        let controls = NSStackView()
-        controls.orientation = .vertical
-        controls.spacing = 8
-        controls.addArrangedSubview(labeledRow("Delivery", modeControl, labelWidth: 62))
-        controls.addArrangedSubview(labeledRow("Voice", voiceField, labelWidth: 62))
-        controls.addArrangedSubview(sliderRow("Speed", replaySpeedSlider, replaySpeedValueLabel, labelWidth: 62))
-        controls.addArrangedSubview(sliderRow("Model", speedSlider, speedValueLabel, labelWidth: 62))
-        controls.addArrangedSubview(sliderRow("Energy", temperatureSlider, temperatureValueLabel, labelWidth: 62))
-        controls.addArrangedSubview(sliderRow("Variety", topPSlider, topPValueLabel, labelWidth: 62))
-        root.addArrangedSubview(panel(controls, fill: false))
-        modeControl.target = self
-        modeControl.action = #selector(modeChanged)
-        voiceField.delegate = self
-        voiceField.target = self
-        voiceField.action = #selector(voiceChanged)
-        voiceField.bezelStyle = .roundedBezel
-        voiceField.font = .systemFont(ofSize: 12.5, weight: .medium)
-        voiceField.textColor = Theme.text
-        voiceField.backgroundColor = Theme.elevated
-        for slider in [speedSlider, replaySpeedSlider, temperatureSlider, topPSlider] {
-            slider.isContinuous = true
-            slider.controlSize = .small
-            slider.target = self
-        }
-        speedSlider.action = #selector(speedSliderChanged)
-        replaySpeedSlider.action = #selector(replaySpeedSliderChanged)
-        temperatureSlider.action = #selector(temperatureSliderChanged)
-        topPSlider.action = #selector(topPSliderChanged)
-
-        let buttons = NSStackView()
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
-        for button in [replayButton, stopButton, speakTestButton] {
-            button.bezelStyle = .rounded
-            buttons.addArrangedSubview(button)
-        }
-        replayButton.target = self
-        replayButton.action = #selector(replayTapped)
-        stopButton.target = self
-        stopButton.action = #selector(stopTapped)
-        speakTestButton.target = self
-        speakTestButton.action = #selector(speakTestTapped)
-        root.addArrangedSubview(buttons)
 
         let inboxHeader = NSStackView()
         inboxHeader.orientation = .horizontal
         inboxHeader.alignment = .centerY
+        let inboxTitleStack = NSStackView()
+        inboxTitleStack.orientation = .vertical
+        inboxTitleStack.spacing = 1
         let inboxTitle = NSTextField(labelWithString: "Inbox")
-        inboxTitle.font = .systemFont(ofSize: 12, weight: .semibold)
-        inboxTitle.textColor = Theme.muted
+        inboxTitle.font = .systemFont(ofSize: 15, weight: .semibold)
+        inboxTitle.textColor = Theme.text
+        inboxCountLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        inboxCountLabel.textColor = Theme.muted
+        inboxTitleStack.addArrangedSubview(inboxTitle)
+        inboxTitleStack.addArrangedSubview(inboxCountLabel)
         let inboxSpacer = NSView()
         inboxSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        replayButton.bezelStyle = .rounded
+        replayButton.target = self
+        replayButton.action = #selector(replayTapped)
+        stopButton.bezelStyle = .rounded
+        stopButton.target = self
+        stopButton.action = #selector(stopTapped)
         archiveButton.bezelStyle = .rounded
         archiveButton.target = self
         archiveButton.action = #selector(archiveTapped)
         clearInboxButton.bezelStyle = .rounded
         clearInboxButton.target = self
         clearInboxButton.action = #selector(clearInboxTapped)
-        inboxHeader.addArrangedSubview(inboxTitle)
+        inboxHeader.addArrangedSubview(inboxTitleStack)
         inboxHeader.addArrangedSubview(inboxSpacer)
+        inboxHeader.addArrangedSubview(replayButton)
+        inboxHeader.addArrangedSubview(stopButton)
         inboxHeader.addArrangedSubview(archiveButton)
         inboxHeader.addArrangedSubview(clearInboxButton)
         root.addArrangedSubview(inboxHeader)
@@ -849,13 +801,82 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         inboxPanel.layer?.borderWidth = 1
         inboxPanel.addSubview(inboxScrollView)
         NSLayoutConstraint.activate([
-            inboxPanel.heightAnchor.constraint(equalToConstant: 396),
+            inboxPanel.heightAnchor.constraint(equalToConstant: 430),
             inboxScrollView.leadingAnchor.constraint(equalTo: inboxPanel.leadingAnchor, constant: 10),
             inboxScrollView.trailingAnchor.constraint(equalTo: inboxPanel.trailingAnchor, constant: -10),
             inboxScrollView.topAnchor.constraint(equalTo: inboxPanel.topAnchor, constant: 10),
             inboxScrollView.bottomAnchor.constraint(equalTo: inboxPanel.bottomAnchor, constant: -10),
         ])
         root.addArrangedSubview(inboxPanel)
+
+        let controlsShell = NSStackView()
+        controlsShell.orientation = .vertical
+        controlsShell.spacing = 8
+        let controlsHeader = NSStackView()
+        controlsHeader.orientation = .horizontal
+        controlsHeader.alignment = .centerY
+        controlsTitle.font = .systemFont(ofSize: 12, weight: .semibold)
+        controlsTitle.textColor = Theme.muted
+        let controlsSpacer = NSView()
+        controlsSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        speakTestButton.bezelStyle = .rounded
+        speakTestButton.target = self
+        speakTestButton.action = #selector(speakTestTapped)
+        controlsHeader.addArrangedSubview(controlsTitle)
+        controlsHeader.addArrangedSubview(controlsSpacer)
+        controlsHeader.addArrangedSubview(speakTestButton)
+        controlsShell.addArrangedSubview(controlsHeader)
+
+        let controls = NSStackView()
+        controls.orientation = .vertical
+        controls.spacing = 7
+        controls.addArrangedSubview(labeledRow("Delivery", modeControl, labelWidth: 62))
+        controls.addArrangedSubview(labeledRow("Voice", voiceField, labelWidth: 62))
+        controls.addArrangedSubview(sliderRow("Talk", replaySpeedSlider, replaySpeedValueLabel, labelWidth: 62))
+        controls.addArrangedSubview(sliderRow("Render", speedSlider, speedValueLabel, labelWidth: 62))
+        controls.addArrangedSubview(sliderRow("Energy", temperatureSlider, temperatureValueLabel, labelWidth: 62))
+        controls.addArrangedSubview(sliderRow("Variety", topPSlider, topPValueLabel, labelWidth: 62))
+        controlsShell.addArrangedSubview(controls)
+        root.addArrangedSubview(panel(controlsShell, fill: false))
+        modeControl.target = self
+        modeControl.action = #selector(modeChanged)
+        voiceField.delegate = self
+        voiceField.target = self
+        voiceField.action = #selector(voiceChanged)
+        voiceField.bezelStyle = .roundedBezel
+        voiceField.font = .systemFont(ofSize: 12.5, weight: .medium)
+        voiceField.textColor = Theme.text
+        voiceField.backgroundColor = Theme.elevated
+        for slider in [speedSlider, replaySpeedSlider, temperatureSlider, topPSlider] {
+            slider.isContinuous = true
+            slider.controlSize = .small
+            slider.target = self
+        }
+        speedSlider.action = #selector(speedSliderChanged)
+        replaySpeedSlider.action = #selector(replaySpeedSliderChanged)
+        temperatureSlider.action = #selector(temperatureSliderChanged)
+        topPSlider.action = #selector(topPSliderChanged)
+
+        let notifyRow = NSStackView()
+        notifyRow.orientation = .horizontal
+        notifyRow.alignment = .centerY
+        notifyRow.spacing = 8
+        notificationLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        notificationLabel.textColor = Theme.muted
+        let notifySpacer = NSView()
+        notifySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        notifyRow.addArrangedSubview(statusLabel)
+        notifyRow.addArrangedSubview(notificationLabel)
+        notifyRow.addArrangedSubview(notifySpacer)
+        for button in [requestNotificationsButton, testNotificationButton] {
+            button.bezelStyle = .rounded
+            notifyRow.addArrangedSubview(button)
+        }
+        requestNotificationsButton.target = self
+        requestNotificationsButton.action = #selector(requestNotificationsTapped)
+        testNotificationButton.target = self
+        testNotificationButton.action = #selector(testNotificationTapped)
+        root.addArrangedSubview(panel(notifyRow, fill: false))
 
         let bottom = NSStackView()
         bottom.orientation = .horizontal
@@ -971,6 +992,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         temperatureSlider.doubleValue = clampedDouble(config.temperature, fallback: 0.45, min: 0.20, max: 0.80)
         topPSlider.doubleValue = clampedDouble(config.top_p, fallback: 0.85, min: 0.65, max: 0.98)
         updateControlLabels()
+
+        let items = store.recentItems(limit: 0)
+        let messageWord = items.count == 1 ? "message" : "messages"
+        inboxCountLabel.stringValue = "\(items.count) \(messageWord)"
 
         let modeText = config.mode.capitalized
         let updated = state?.updated_at ?? "never"
@@ -1206,7 +1231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         popoverController.onConfigChanged = { [weak self] in self?.updateIcon() }
         popoverController.onReplayRateChanged = { [weak self] rate in self?.setReplayRate(rate) }
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 820),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false

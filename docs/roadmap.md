@@ -1,13 +1,14 @@
 # Roadmap
 
-Agent Voice Bar is beta software. The first release focuses on the core loop:
-agents send messages through MCP, local TTS renders them, and the Mac app keeps a
-replayable inbox.
+Agent Voice Bar is beta software. The product direction is an agent inbox first:
+agents send messages through MCP, the Mac app stores the history, and local TTS
+is an optional layer on top.
 
 Planned directions:
 
 Near-term:
 
+- Inbox-first menu-bar layout with message actions attached to the message list.
 - App-owned playback, notifications, unread state, and stable inbox reloads.
 - Message metadata: title, source agent, priority, status, and generated audio.
 - Read/unread, pin, delete, and filters for the menu-bar inbox.

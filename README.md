@@ -1,7 +1,10 @@
 # Agent Voice Bar
 
-> Beta local voice inbox for AI agents. Think "reverse Spokenly": agents talk
-> back to you through local TTS, notifications, and a replayable macOS inbox.
+> Beta local agent inbox for macOS. Agents send structured messages; your Mac
+> stores the history, notifies you, and optionally speaks updates aloud with
+> local TTS.
+
+![Agent Voice Bar hero](docs/assets/agent-voice-bar-hero.png)
 
 Agent Voice Bar is a local-first macOS app for messages from AI agents. Codex,
 Claude Code, or any MCP-capable tool can call a `speak_text` tool, and your Mac
@@ -12,29 +15,28 @@ It is especially useful when agents run in another terminal, another app, or a
 remote SSH box. With a reverse SSH tunnel, a cloud/Ubuntu agent can still send
 voice updates to the Mac on your desk.
 
-![Agent Voice Bar icon](Assets/AgentVoiceBarIcon.png)
-
 ## Status
 
 This is beta software. The core loop works, but the app is still being polished:
 
+- inbox-first menu-bar app and full Dashboard window
 - local Qwen/MLX TTS backend
 - MCP `speak_text` tool with optional title/source/priority metadata
 - notify/autoplay/silent modes
 - app-owned playback and notifications
 - direct voice, real talk-speed, model-speed, energy, and variety controls
 - replayable scrolling inbox
-- full dashboard window for longer history and message detail
 - expandable full-message bubbles during replay
 - unread menu-bar count and archive/clear actions
 - macOS notification fallback through `terminal-notifier`
 - optional remote use over reverse SSH
 
-## Why
+## Why This Exists
 
 Spokenly is great for speech-to-text: you talk, agents receive text.
 
-Agent Voice Bar is the other direction: agents talk, you receive local speech.
+Agent Voice Bar is the other direction: agents talk, you receive a local inbox.
+Speech is an extra layer on top of the inbox, not the whole product.
 
 Use it for:
 
@@ -43,6 +45,16 @@ Use it for:
 - background coding/research agents
 - "tell me when you need me" workflows
 - local-only TTS without cloud accounts
+
+## What It Does
+
+- Stores agent messages in a local, replayable inbox.
+- Shows message metadata like source, title, priority, mode, and render status.
+- Renders speech locally through the bundled Qwen/MLX backend.
+- Lets the app decide whether a ready message should notify, autoplay, or stay
+  silent.
+- Keeps playback under app control so overlapping speech is avoidable.
+- Works with remote agents through a reverse SSH tunnel to your Mac.
 
 ## Architecture
 
