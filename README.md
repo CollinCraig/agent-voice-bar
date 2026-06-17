@@ -25,6 +25,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - Speak/Notify/DND delivery modes
 - app-owned playback and notifications
 - serial autoplay queue to avoid readouts interrupting each other
+- Skip and Stop controls for queued playback
 - direct voice, real talk-speed, model-speed, energy, and variety controls
 - replayable scrolling inbox
 - inbox search and source/channel filtering in the mini app and Dashboard
@@ -66,6 +67,8 @@ Use it for:
 - Keeps playback under app control so overlapping speech is avoidable.
 - Queues automatic readouts so newly rendered messages wait for the current
   one to finish instead of interrupting it.
+- Lets you skip the current readout while preserving the queue, or stop and
+  clear playback entirely.
 - Clears stale playback state if macOS audio startup or finish callbacks misbehave.
 - Records local playback attempts so Doctor can show whether audio started,
   finished, stopped, or failed.

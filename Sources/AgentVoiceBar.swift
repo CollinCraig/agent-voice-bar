@@ -552,6 +552,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
     let store: VoiceStore
     var onReplayFile: ((String) -> Void)?
     var onStop: (() -> Void)?
+    var onSkip: (() -> Void)?
     var onArchiveItem: ((String?) -> Void)?
     var onClearInbox: (() -> Void)?
 
@@ -567,6 +568,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
     private let detailMeta = NSTextField(labelWithString: "Agent inbox")
     private let detailText = NSTextView()
     private let replayButton = NSButton(title: "Replay", target: nil, action: nil)
+    private let skipButton = NSButton(title: "Skip", target: nil, action: nil)
     private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
     private let archiveButton = NSButton(title: "Archive", target: nil, action: nil)
     private let clearButton = NSButton(title: "Clear", target: nil, action: nil)
@@ -624,11 +626,13 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         titleStack.addArrangedSubview(subtitle)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        for button in [replayButton, stopButton, archiveButton, clearButton, refreshButton] {
+        for button in [replayButton, skipButton, stopButton, archiveButton, clearButton, refreshButton] {
             button.bezelStyle = .rounded
         }
         replayButton.target = self
         replayButton.action = #selector(replayTapped)
+        skipButton.target = self
+        skipButton.action = #selector(skipTapped)
         stopButton.target = self
         stopButton.action = #selector(stopTapped)
         archiveButton.target = self
@@ -639,7 +643,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         refreshButton.action = #selector(refreshTapped)
         header.addArrangedSubview(titleStack)
         header.addArrangedSubview(spacer)
-        for button in [replayButton, stopButton, archiveButton, clearButton, refreshButton] {
+        for button in [replayButton, skipButton, stopButton, archiveButton, clearButton, refreshButton] {
             header.addArrangedSubview(button)
         }
         root.addArrangedSubview(header)
@@ -945,6 +949,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
             reload()
         }
     }
+    @objc private func skipTapped() { onSkip?() }
     @objc private func stopTapped() { onStop?() }
     @objc private func archiveTapped() { onArchiveItem?(selectedItemKey) }
     @objc private func clearTapped() { onClearInbox?() }
@@ -956,6 +961,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     var onReplayLast: (() -> Void)?
     var onReplayFile: ((String) -> Void)?
     var onStop: (() -> Void)?
+    var onSkip: (() -> Void)?
     var onSpeakTest: (() -> Void)?
     var onRequestNotifications: (() -> Void)?
     var onTestNotification: (() -> Void)?
@@ -996,6 +1002,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     private let inboxScrollView = NSScrollView()
     private let inboxDocument = InboxDocumentView()
     private let replayButton = NSButton(title: "Replay Last", target: nil, action: nil)
+    private let skipButton = NSButton(title: "Skip", target: nil, action: nil)
     private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
     private let speakTestButton = NSButton(title: "Speak Test", target: nil, action: nil)
     private let requestNotificationsButton = NSButton(title: "Request", target: nil, action: nil)
@@ -1179,6 +1186,9 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         replayButton.title = "Replay"
         replayButton.target = self
         replayButton.action = #selector(replayTapped)
+        skipButton.bezelStyle = .rounded
+        skipButton.target = self
+        skipButton.action = #selector(skipTapped)
         stopButton.bezelStyle = .rounded
         stopButton.target = self
         stopButton.action = #selector(stopTapped)
@@ -1193,6 +1203,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         inboxActions.addArrangedSubview(filterControl)
         inboxActions.addArrangedSubview(actionSpacer)
         inboxActions.addArrangedSubview(replayButton)
+        inboxActions.addArrangedSubview(skipButton)
         inboxActions.addArrangedSubview(stopButton)
         inboxActions.addArrangedSubview(archiveButton)
         inboxActions.addArrangedSubview(clearInboxButton)
@@ -1746,6 +1757,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         }
         onReplayLast?()
     }
+    @objc private func skipTapped() { onSkip?() }
     @objc private func stopTapped() { onStop?() }
     @objc private func speakTestTapped() { onSpeakTest?() }
     @objc private func requestNotificationsTapped() { onRequestNotifications?() }
@@ -1814,6 +1826,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         popoverController.onReplayLast = { [weak self] in self?.replayLast() }
         popoverController.onReplayFile = { [weak self] file in self?.replay(file: file) }
         popoverController.onStop = { [weak self] in self?.stopPlayback() }
+        popoverController.onSkip = { [weak self] in self?.skipPlayback() }
         popoverController.onSpeakTest = { [weak self] in self?.speakTestLine() }
         popoverController.onRequestNotifications = { [weak self] in self?.requestNotifications() }
         popoverController.onTestNotification = { [weak self] in self?.deliverTestNotification() }
@@ -1910,6 +1923,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             showPanel()
         case "replay_last":
             replayLast()
+        case "skip":
+            skipPlayback()
         case "doctor":
             runDoctor(showPanelWhenDone: true)
         default:
@@ -1970,6 +1985,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let controller = DashboardViewController(store: store)
             controller.onReplayFile = { [weak self] file in self?.replay(file: file) }
             controller.onStop = { [weak self] in self?.stopPlayback() }
+            controller.onSkip = { [weak self] in self?.skipPlayback() }
             controller.onArchiveItem = { [weak self] key in self?.archiveItem(key) }
             controller.onClearInbox = { [weak self] in self?.clearInbox() }
             let window = NSWindow(
@@ -2374,6 +2390,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             recordPlaybackEvent("stopped", file: file, detail: "Stopped by user")
         }
         popoverController.setNotificationStatus("Playback: stopped", color: Theme.muted)
+    }
+
+    private func skipPlayback() {
+        guard let file = playingFile else {
+            playNextAutoplayIfIdle()
+            popoverController.setNotificationStatus("Playback: nothing to skip", color: Theme.muted)
+            return
+        }
+        audioPlayer?.stop()
+        recordPlaybackEvent("skipped", file: file, detail: "Skipped to next queued readout", duration: audioPlayer?.duration, rate: audioPlayer?.rate)
+        clearPlaybackState()
+        popoverController.setNotificationStatus("Playback: skipped", color: Theme.amber)
+        playNextAutoplayIfIdle()
     }
 
     private func setReplayRate(_ rate: Float) {
