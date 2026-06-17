@@ -21,6 +21,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - MCP `speak_text` tool
 - notify/autoplay/silent modes
 - replayable scrolling inbox
+- expandable full-message bubbles during replay
 - macOS notification fallback through `terminal-notifier`
 - optional remote use over reverse SSH
 

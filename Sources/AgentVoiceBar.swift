@@ -159,7 +159,7 @@ final class InboxDocumentView: NSView {
 final class BubbleRow: NSView {
     let item: VoiceItem
 
-    init(item: VoiceItem, isPlaying: Bool, target: AnyObject, action: Selector) {
+    init(item: VoiceItem, isPlaying: Bool, isExpanded: Bool, target: AnyObject, action: Selector) {
         self.item = item
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -215,10 +215,10 @@ final class BubbleRow: NSView {
         let body = NSTextField(wrappingLabelWithString: item.text ?? "(empty)")
         body.font = .systemFont(ofSize: 12.8, weight: .regular)
         body.textColor = Theme.text
-        body.maximumNumberOfLines = 2
-        body.lineBreakMode = .byTruncatingTail
+        body.maximumNumberOfLines = isExpanded ? 0 : 2
+        body.lineBreakMode = isExpanded ? .byWordWrapping : .byTruncatingTail
 
-        let footer = NSTextField(labelWithString: footerText(for: item, isPlaying: isPlaying))
+        let footer = NSTextField(labelWithString: footerText(for: item, isPlaying: isPlaying, isExpanded: isExpanded))
         footer.font = .systemFont(ofSize: 11, weight: .medium)
         footer.textColor = isPlaying ? Theme.playing : Theme.muted
 
@@ -226,8 +226,8 @@ final class BubbleRow: NSView {
         overlay.isBordered = false
         overlay.filePath = item.file
         overlay.itemID = item.id
-        overlay.isEnabled = item.file != nil
-        overlay.toolTip = item.file == nil ? "Audio not ready yet" : (isPlaying ? "Stop playback" : "Replay this message")
+        overlay.isEnabled = true
+        overlay.toolTip = item.file == nil ? "Show full message" : (isPlaying ? "Stop playback" : "Replay and expand")
         overlay.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(root)
@@ -268,10 +268,12 @@ final class BubbleRow: NSView {
         return item.status == "ready" ? ">" : "..."
     }
 
-    private func footerText(for item: VoiceItem, isPlaying: Bool) -> String {
+    private func footerText(for item: VoiceItem, isPlaying: Bool, isExpanded: Bool) -> String {
         if isPlaying { return "Playing now - click to stop" }
+        if isExpanded && item.file != nil { return "Full prompt shown - click to replay" }
+        if isExpanded { return "Full prompt shown" }
         if item.source == "app" && item.file == nil { return "Notification only" }
-        return item.file == nil ? "Audio rendering" : "Click to replay"
+        return item.file == nil ? "Click to expand" : "Click to replay"
     }
 
     private func color(for status: String?, isPlaying: Bool) -> NSColor {
@@ -299,6 +301,7 @@ final class VoicePopoverController: NSViewController {
     var onQuit: (() -> Void)?
     var onConfigChanged: (() -> Void)?
     private var playingFile: String?
+    private var expandedItemID: String?
 
     private let modeControl = NSSegmentedControl(labels: ["Auto", "Notify", "Silent"], trackingMode: .selectOne, target: nil, action: nil)
     private let speedControl = NSSegmentedControl(labels: ["1.20", "1.28", "1.35", "1.45"], trackingMode: .selectOne, target: nil, action: nil)
@@ -544,6 +547,10 @@ final class VoicePopoverController: NSViewController {
 
     func setPlayingFile(_ file: String?) {
         playingFile = file
+        if let file,
+           let item = store.recentItems(limit: 80).first(where: { $0.file == file }) {
+            expandedItemID = item.id ?? item.file
+        }
         rebuildInbox()
     }
 
@@ -614,20 +621,39 @@ final class VoicePopoverController: NSViewController {
         }
         var y: CGFloat = 0
         for item in items {
-            let row = BubbleRow(item: item, isPlaying: item.file == playingFile, target: self, action: #selector(replayBubble(_:)))
+            let itemKey = item.id ?? item.file ?? item.created_at
+            let isExpanded = itemKey == expandedItemID
+            let rowHeight = height(for: item, width: width, isExpanded: isExpanded)
+            let row = BubbleRow(item: item, isPlaying: item.file == playingFile, isExpanded: isExpanded, target: self, action: #selector(replayBubble(_:)))
             row.translatesAutoresizingMaskIntoConstraints = true
-            row.frame = NSRect(x: 0, y: y, width: width, height: 92)
+            row.frame = NSRect(x: 0, y: y, width: width, height: rowHeight)
             inboxDocument.addSubview(row)
-            y += 100
+            y += rowHeight + 8
         }
         inboxDocument.frame = NSRect(x: 0, y: 0, width: width, height: max(396, y))
         inboxDocument.needsLayout = true
         inboxDocument.needsDisplay = true
     }
 
+    private func height(for item: VoiceItem, width: CGFloat, isExpanded: Bool) -> CGFloat {
+        if !isExpanded { return 92 }
+        let text = item.text ?? ""
+        let bubbleWidth = min(356, max(260, width - 74))
+        let bodyWidth = bubbleWidth - 22
+        let bodyHeight = text.boundingRect(
+            with: NSSize(width: bodyWidth, height: 1000),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.systemFont(ofSize: 12.8, weight: .regular)]
+        ).height
+        return min(280, max(124, ceil(bodyHeight) + 68))
+    }
+
     @objc private func replayBubble(_ sender: ReplayBubbleButton) {
-        guard let file = sender.filePath else { return }
-        onReplayFile?(file)
+        expandedItemID = sender.itemID ?? sender.filePath
+        rebuildInbox()
+        if let file = sender.filePath {
+            onReplayFile?(file)
+        }
     }
 
     @objc private func modeChanged() {
@@ -648,7 +674,13 @@ final class VoicePopoverController: NSViewController {
         onConfigChanged?()
     }
 
-    @objc private func replayTapped() { onReplayLast?() }
+    @objc private func replayTapped() {
+        if let item = store.readState()?.last {
+            expandedItemID = item.id ?? item.file ?? item.created_at
+            rebuildInbox()
+        }
+        onReplayLast?()
+    }
     @objc private func stopTapped() { onStop?() }
     @objc private func speakTestTapped() { onSpeakTest?() }
     @objc private func requestNotificationsTapped() { onRequestNotifications?() }
