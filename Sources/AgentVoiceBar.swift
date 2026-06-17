@@ -133,8 +133,10 @@ func shortPlaybackTime(_ value: String) -> String {
 func displayPlaybackEvent(_ event: String) -> String {
     switch event {
     case "started": return "Started"
+    case "queued_autoplay": return "Queued"
     case "finished", "watchdog_finished": return "Played"
     case "stopped": return "Stopped"
+    case "skipped": return "Skipped"
     case "missing_file": return "Missing audio"
     case "failed_load": return "Load failed"
     case "failed_start": return "Start failed"
@@ -1771,6 +1773,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var audioPlayer: AVAudioPlayer?
     private var playingFile: String?
     private var playbackWatchdog: Timer?
+    private var autoplayQueue: [String] = []
+    private var queuedAutoplayFiles = Set<String>()
     private var unreadCount = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1881,7 +1885,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 switch item.mode {
                 case "autoplay":
                     if let file = item.file, file != playingFile {
-                        replay(file: file)
+                        enqueueAutoplay(file: file)
                     }
                 case "notify":
                     deliverNotification(for: item)
@@ -2149,6 +2153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     let config = self.store.readConfig()
                     let ruleCount = self.store.readRules().sources.count
                     let playbackLine = self.latestPlaybackLine()
+                    let queueLine = "Autoplay queue: \(self.autoplayQueue.count)"
                     let mode = self.displayModeName(config.mode)
                     let text = [
                         "Delivery: \(mode)",
@@ -2156,6 +2161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         "Render speed: \(config.speed)x",
                         "Talk speed: \(config.replay_speed)x",
                         "Source rules: \(ruleCount)",
+                        queueLine,
                         playbackLine,
                         notificationLine,
                         terminalNotifierLine,
@@ -2273,17 +2279,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func replay(file: String) {
+        play(file: file, source: "manual")
+    }
+
+    private func enqueueAutoplay(file: String) {
+        guard file != playingFile, !queuedAutoplayFiles.contains(file) else { return }
+        autoplayQueue.append(file)
+        queuedAutoplayFiles.insert(file)
+        recordPlaybackEvent("queued_autoplay", file: file, detail: "Waiting for prior readouts to finish")
+        popoverController.setNotificationStatus("Playback: queued \(autoplayQueue.count)", color: Theme.amber)
+        playNextAutoplayIfIdle()
+    }
+
+    private func playNextAutoplayIfIdle() {
+        guard audioPlayer == nil, !autoplayQueue.isEmpty else { return }
+        let next = autoplayQueue.removeFirst()
+        queuedAutoplayFiles.remove(next)
+        play(file: next, source: "autoplay")
+    }
+
+    private func clearAutoplayQueue(reason: String) {
+        let queued = autoplayQueue
+        autoplayQueue.removeAll()
+        queuedAutoplayFiles.removeAll()
+        for file in queued {
+            recordPlaybackEvent("skipped", file: file, detail: reason)
+        }
+    }
+
+    private func play(file: String, source: String) {
         if playingFile == file {
             stopPlayback()
             return
         }
-        stopPlayback()
+        if source == "manual" {
+            clearAutoplayQueue(reason: "Manual replay interrupted queued autoplay")
+            stopPlayback()
+        } else if audioPlayer != nil {
+            enqueueAutoplay(file: file)
+            return
+        }
 
         guard FileManager.default.fileExists(atPath: file) else {
             clearPlaybackState()
             popoverController.setNotificationStatus("Playback: missing file", color: .systemRed)
             recordPlaybackEvent("missing_file", file: file, detail: "Audio file was missing")
             appendAppMessage(title: "Playback failed", text: "Audio file was missing:\n\(file)", priority: "high")
+            if source == "autoplay" {
+                playNextAutoplayIfIdle()
+            }
             return
         }
 
@@ -2298,6 +2342,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 recordPlaybackEvent("failed_start", file: file, detail: "AVAudioPlayer.play() returned false", duration: player.duration, rate: player.rate)
                 clearPlaybackState()
                 popoverController.setNotificationStatus("Playback: could not start", color: .systemRed)
+                if source == "autoplay" {
+                    playNextAutoplayIfIdle()
+                }
                 return
             }
             playingFile = file
@@ -2310,10 +2357,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             recordPlaybackEvent("failed_load", file: file, detail: error.localizedDescription)
             clearPlaybackState()
             popoverController.setNotificationStatus("Playback: \(error.localizedDescription)", color: .systemRed)
+            if source == "autoplay" {
+                playNextAutoplayIfIdle()
+            }
         }
     }
 
-    private func stopPlayback() {
+    private func stopPlayback(clearQueue: Bool = true) {
+        if clearQueue {
+            clearAutoplayQueue(reason: "Playback stopped")
+        }
         let file = playingFile
         audioPlayer?.stop()
         clearPlaybackState()
@@ -2357,6 +2410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 self.recordPlaybackEvent("watchdog_finished", file: file, detail: "Playback watchdog cleared stale state", duration: player.duration, rate: player.rate)
                 self.clearPlaybackState()
                 self.popoverController.setNotificationStatus("Playback: finished", color: Theme.green)
+                self.playNextAutoplayIfIdle()
             } else {
                 self.schedulePlaybackWatchdog(for: file, player: player)
             }
@@ -2380,6 +2434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         clearPlaybackState()
         popoverController.setNotificationStatus(flag ? "Playback: finished" : "Playback: stopped", color: flag ? Theme.green : Theme.muted)
+        playNextAutoplayIfIdle()
     }
 
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
@@ -2390,6 +2445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         clearPlaybackState()
         popoverController.setNotificationStatus("Playback: decode failed", color: .systemRed)
+        playNextAutoplayIfIdle()
     }
 
     private func recordPlaybackEvent(_ name: String, file: String?, detail: String?, duration: Double? = nil, rate: Float? = nil) {
