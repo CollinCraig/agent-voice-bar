@@ -932,10 +932,10 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
             let rowHeight = height(for: item, width: width, isExpanded: isExpanded)
             let row = BubbleRow(
                 item: item,
-                isPlaying: item.file == playingFile,
+                isPlaying: isPlaying(item),
                 isExpanded: isExpanded,
                 bubbleWidth: bubbleWidth,
-                playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }, isPlaying: item.file == playingFile),
+                playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }, isPlaying: isPlaying(item)),
                 playsOnClick: false,
                 target: self,
                 action: #selector(messageTapped(_:))
@@ -949,6 +949,11 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
 
     private func height(for item: VoiceItem, width: CGFloat, isExpanded: Bool) -> CGFloat {
         isExpanded ? 96 : 86
+    }
+
+    private func isPlaying(_ item: VoiceItem) -> Bool {
+        guard let file = item.file, !file.isEmpty else { return false }
+        return file == playingFile
     }
 
     private func updateDetail() {
@@ -1700,7 +1705,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         }
 
         selectedTitleLabel.stringValue = item.displayTitle
-        let playback = playbackFooterText(store.latestPlaybackEvent(for: item), isPlaying: item.file == playingFile)
+        let playback = playbackFooterText(store.latestPlaybackEvent(for: item), isPlaying: isPlaying(item))
         selectedMetaLabel.stringValue = [
             sourceName(item),
             displayModeName(item.mode ?? "message"),
@@ -1736,10 +1741,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
             let rowHeight = height(for: item, width: width, isExpanded: isExpanded)
             let row = BubbleRow(
                 item: item,
-                isPlaying: item.file == playingFile,
+                isPlaying: isPlaying(item),
                 isExpanded: isExpanded,
                 bubbleWidth: bubbleWidth,
-                playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }, isPlaying: item.file == playingFile),
+                playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }, isPlaying: isPlaying(item)),
                 playsOnClick: true,
                 target: self,
                 action: #selector(replayBubble(_:))
@@ -1843,6 +1848,11 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     private func sourceName(_ item: VoiceItem) -> String {
         let value = (item.source ?? "agent").trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? "agent" : value
+    }
+
+    private func isPlaying(_ item: VoiceItem) -> Bool {
+        guard let file = item.file, !file.isEmpty else { return false }
+        return file == playingFile
     }
 
     private func displayModeName(_ mode: String) -> String {
