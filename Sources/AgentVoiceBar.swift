@@ -428,7 +428,7 @@ final class InboxDocumentView: NSView {
 final class BubbleRow: NSView {
     let item: VoiceItem
 
-    init(item: VoiceItem, isPlaying: Bool, isExpanded: Bool, bubbleWidth: CGFloat, playbackSummary: String?, target: AnyObject, action: Selector) {
+    init(item: VoiceItem, isPlaying: Bool, isExpanded: Bool, bubbleWidth: CGFloat, playbackSummary: String?, playsOnClick: Bool, target: AnyObject, action: Selector) {
         self.item = item
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -487,7 +487,7 @@ final class BubbleRow: NSView {
         body.maximumNumberOfLines = 2
         body.lineBreakMode = .byTruncatingTail
 
-        let footer = NSTextField(labelWithString: footerText(for: item, isPlaying: isPlaying, isExpanded: isExpanded, playbackSummary: playbackSummary))
+        let footer = NSTextField(labelWithString: footerText(for: item, isPlaying: isPlaying, isExpanded: isExpanded, playbackSummary: playbackSummary, playsOnClick: playsOnClick))
         footer.font = .systemFont(ofSize: 10.8, weight: .medium)
         footer.textColor = isPlaying ? Theme.playing : Theme.muted
         footer.maximumNumberOfLines = 1
@@ -498,7 +498,7 @@ final class BubbleRow: NSView {
         overlay.filePath = item.file
         overlay.itemID = item.stableKey
         overlay.isEnabled = true
-        overlay.toolTip = item.file == nil ? "Select message" : (isPlaying ? "Stop playback" : "Replay message")
+        overlay.toolTip = item.file == nil ? "Select message" : (isPlaying ? "Stop playback" : (playsOnClick ? "Replay message" : "Select message"))
         overlay.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(root)
@@ -549,13 +549,14 @@ final class BubbleRow: NSView {
         return NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? NSImage()
     }
 
-    private func footerText(for item: VoiceItem, isPlaying: Bool, isExpanded: Bool, playbackSummary: String?) -> String {
+    private func footerText(for item: VoiceItem, isPlaying: Bool, isExpanded: Bool, playbackSummary: String?, playsOnClick: Bool) -> String {
         if isPlaying { return "Playing now - click to stop" }
         let source = (item.source ?? "agent").trimmingCharacters(in: .whitespacesAndNewlines)
         let mode = displayMode(item.mode)
         let priority = (item.priority ?? "normal").lowercased() == "normal" ? nil : item.priority?.uppercased()
         let status = playbackSummary ?? statusText(for: item)
-        let action = item.file == nil ? (isExpanded ? "selected" : "click to select") : (isExpanded ? "selected - click to replay" : "click to replay")
+        let replayAction = playsOnClick ? "click to replay" : "click to select"
+        let action = item.file == nil ? (isExpanded ? "selected" : "click to select") : (isExpanded ? "selected" : replayAction)
         return [priority, source.isEmpty ? "agent" : source, mode, status, action]
             .compactMap { $0 }
             .joined(separator: "  •  ")
@@ -686,6 +687,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         for button in [replayButton, skipButton, stopButton, archiveButton, clearButton, refreshButton] {
             button.bezelStyle = .rounded
+            button.controlSize = .small
         }
         replayButton.target = self
         replayButton.action = #selector(replayTapped)
@@ -714,14 +716,14 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         searchField.delegate = self
         searchField.target = self
         searchField.action = #selector(searchChanged)
-        searchField.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        searchField.widthAnchor.constraint(equalToConstant: 320).isActive = true
         sourcePopup.target = self
         sourcePopup.action = #selector(sourceChanged)
         sourcePopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
         sourceRuleControl.controlSize = .small
         sourceRuleControl.target = self
         sourceRuleControl.action = #selector(sourceRuleChanged)
-        sourceRuleControl.widthAnchor.constraint(equalToConstant: 250).isActive = true
+        sourceRuleControl.widthAnchor.constraint(equalToConstant: 230).isActive = true
         resultCountLabel.font = .systemFont(ofSize: 12, weight: .medium)
         resultCountLabel.textColor = Theme.muted
         let filterSpacer = NSView()
@@ -757,13 +759,14 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         detailTitle.font = .systemFont(ofSize: 18, weight: .semibold)
         detailTitle.textColor = Theme.text
         detailTitle.maximumNumberOfLines = 2
-        detailMeta.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
-        detailMeta.textColor = Theme.cyan
+        detailMeta.font = .systemFont(ofSize: 11.5, weight: .medium)
+        detailMeta.textColor = Theme.muted
         detailText.isEditable = false
         detailText.drawsBackground = false
         detailText.textColor = Theme.text
         detailText.font = .systemFont(ofSize: 14, weight: .regular)
-        detailText.textContainerInset = NSSize(width: 4, height: 6)
+        detailText.textContainerInset = NSSize(width: 0, height: 6)
+        detailText.textContainer?.lineFragmentPadding = 0
         let detailScroll = NSScrollView()
         detailScroll.documentView = detailText
         detailScroll.hasVerticalScroller = true
@@ -855,6 +858,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
                 isExpanded: isExpanded,
                 bubbleWidth: bubbleWidth,
                 playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }, isPlaying: item.file == playingFile),
+                playsOnClick: false,
                 target: self,
                 action: #selector(messageTapped(_:))
             )
@@ -866,14 +870,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
     }
 
     private func height(for item: VoiceItem, width: CGFloat, isExpanded: Bool) -> CGFloat {
-        if !isExpanded { return 86 }
-        let bubbleWidth = min(420, max(300, width - 74))
-        let bodyHeight = item.displayBodyText.boundingRect(
-            with: NSSize(width: bubbleWidth - 22, height: 1600),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: NSFont.systemFont(ofSize: 12.2, weight: .regular)]
-        ).height
-        return min(340, max(118, ceil(bodyHeight) + 78))
+        isExpanded ? 96 : 86
     }
 
     private func updateDetail() {
@@ -887,15 +884,15 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
             return
         }
         detailTitle.stringValue = item.displayTitle
-        let source = (item.source ?? "agent").uppercased()
-        let status = (item.status ?? "queued").uppercased()
-        let mode = (item.mode ?? "message").uppercased()
+        let source = sourceName(item)
+        let status = (item.status ?? "queued").capitalized
+        let mode = displayModeName(item.mode ?? "message")
         let created = item.created_at ?? "unknown time"
-        detailMeta.stringValue = "\(source) / \(mode) / \(status) / \(created)"
+        detailMeta.stringValue = "\(source)  •  \(mode)  •  \(status)  •  \(created)"
         if let playbackDetail = playbackDetailText(store.latestPlaybackEvent(for: item)) {
-            detailText.string = "\(item.displayText)\n\nPlayback\n\(playbackDetail)"
+            detailText.string = "\(item.displayBodyText)\n\nPlayback\n\(playbackDetail)"
         } else {
-            detailText.string = item.displayText
+            detailText.string = item.displayBodyText
         }
         replayButton.isEnabled = item.file != nil
         archiveButton.isEnabled = true
@@ -905,9 +902,6 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         selectedItemKey = sender.itemID ?? sender.filePath
         rebuildList()
         updateDetail()
-        if let file = sender.filePath {
-            onReplayFile?(file)
-        }
     }
 
     @objc private func replayTapped() {
@@ -957,6 +951,15 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
     private func sourceName(_ item: VoiceItem) -> String {
         let value = (item.source ?? "agent").trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? "agent" : value
+    }
+
+    private func displayModeName(_ mode: String) -> String {
+        switch mode {
+        case "autoplay": return "Speak"
+        case "notify": return "Notify"
+        case "silent": return "DND"
+        default: return "Message"
+        }
     }
 
     private func countText(shown: Int, total: Int) -> String {
@@ -1093,7 +1096,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 800))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 760))
         view.wantsLayer = true
         view.layer?.backgroundColor = Theme.background.cgColor
     }
@@ -1227,24 +1230,9 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         searchRow.addArrangedSubview(sourcePopup)
         inboxSectionHeader.addArrangedSubview(searchRow)
 
-        let ruleRow = NSStackView()
-        ruleRow.orientation = .horizontal
-        ruleRow.alignment = .centerY
-        ruleRow.spacing = 8
-        let ruleLabel = NSTextField(labelWithString: "Source rule")
-        ruleLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
-        ruleLabel.textColor = Theme.muted
-        ruleLabel.widthAnchor.constraint(equalToConstant: 72).isActive = true
         sourceRuleControl.controlSize = .small
         sourceRuleControl.target = self
         sourceRuleControl.action = #selector(sourceRuleChanged)
-        sourceRuleControl.widthAnchor.constraint(equalToConstant: 260).isActive = true
-        let ruleSpacer = NSView()
-        ruleSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        ruleRow.addArrangedSubview(ruleLabel)
-        ruleRow.addArrangedSubview(sourceRuleControl)
-        ruleRow.addArrangedSubview(ruleSpacer)
-        inboxSectionHeader.addArrangedSubview(ruleRow)
 
         let inboxActions = NSStackView()
         inboxActions.orientation = .horizontal
@@ -1299,7 +1287,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         inboxPanel.layer?.borderWidth = 1
         inboxPanel.addSubview(inboxScrollView)
         NSLayoutConstraint.activate([
-            inboxPanel.heightAnchor.constraint(equalToConstant: 430),
+            inboxPanel.heightAnchor.constraint(equalToConstant: 300),
             inboxScrollView.leadingAnchor.constraint(equalTo: inboxPanel.leadingAnchor, constant: 10),
             inboxScrollView.trailingAnchor.constraint(equalTo: inboxPanel.trailingAnchor, constant: -10),
             inboxScrollView.topAnchor.constraint(equalTo: inboxPanel.topAnchor, constant: 10),
@@ -1367,11 +1355,9 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         notificationLabel.textColor = Theme.muted
         let notifySpacer = NSView()
         notifySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        notifyRow.addArrangedSubview(notificationTitleLabel)
-        notifyRow.addArrangedSubview(statusLabel)
         notifyRow.addArrangedSubview(notificationLabel)
         notifyRow.addArrangedSubview(notifySpacer)
-        for button in [requestNotificationsButton, testNotificationButton, doctorButton] {
+        for button in [doctorButton, requestNotificationsButton] {
             button.bezelStyle = .rounded
             notifyRow.addArrangedSubview(button)
         }
@@ -1388,7 +1374,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         bottom.alignment = .centerY
         bottom.spacing = 8
         for (label, action) in [
-            ("Notify Settings", #selector(openNotificationSettingsTapped)),
+            ("Settings", #selector(openNotificationSettingsTapped)),
             ("Pronunciations", #selector(openPronunciationsTapped)),
             ("Folder", #selector(openFolderTapped)),
             ("Quit", #selector(quitTapped)),
@@ -1398,11 +1384,6 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
             bottom.addArrangedSubview(button)
         }
         root.addArrangedSubview(bottom)
-
-        let footer = NSTextField(labelWithString: "Open-source ready: local-first, MCP-friendly, no cloud account required.")
-        footer.font = .systemFont(ofSize: 10.5, weight: .medium)
-        footer.textColor = Theme.muted
-        root.addArrangedSubview(footer)
     }
 
     private func statusDot() -> NSView {
@@ -1446,14 +1427,14 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
-        scroll.heightAnchor.constraint(equalToConstant: 86).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 52).isActive = true
 
         stack.addArrangedSubview(selectedTitleLabel)
         stack.addArrangedSubview(selectedMetaLabel)
         stack.addArrangedSubview(scroll)
 
         let box = panel(stack, fill: false, padding: 10)
-        box.heightAnchor.constraint(equalToConstant: 138).isActive = true
+        box.heightAnchor.constraint(equalToConstant: 104).isActive = true
         return box
     }
 
@@ -1656,6 +1637,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
                 isExpanded: isExpanded,
                 bubbleWidth: bubbleWidth,
                 playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }, isPlaying: item.file == playingFile),
+                playsOnClick: true,
                 target: self,
                 action: #selector(replayBubble(_:))
             )
@@ -1815,7 +1797,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         tuningVisible.toggle()
         controlsPanel?.isHidden = !tuningVisible
         tuneButton.title = tuningVisible ? "Hide" : "Tune"
-        view.window?.setContentSize(NSSize(width: 500, height: tuningVisible ? 900 : 800))
+        view.window?.setContentSize(NSSize(width: 500, height: tuningVisible ? 860 : 760))
     }
 
     @objc private func modeChanged() {
@@ -1891,7 +1873,6 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
 
     func controlTextDidChange(_ obj: Notification) {
         if obj.object as? NSSearchField === searchField {
-            rebuildInbox()
             reload()
         }
     }
@@ -1997,7 +1978,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         popoverController.onConfigChanged = { [weak self] in self?.updateIcon() }
         popoverController.onReplayRateChanged = { [weak self] rate in self?.setReplayRate(rate) }
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 800),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 760),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
