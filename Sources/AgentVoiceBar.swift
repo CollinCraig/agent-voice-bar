@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreServices
 import Foundation
 import UserNotifications
 
@@ -1077,20 +1078,25 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
             DispatchQueue.main.async {
                 switch settings.authorizationStatus {
                 case .authorized, .provisional, .ephemeral:
-                    self?.notificationLabel.stringValue = "Notifications: authorized"
-                    self?.notificationLabel.textColor = Theme.cyan
+                    if settings.alertSetting == .disabled {
+                        self?.setNotificationStatus("Notifications: alerts off", color: .systemOrange)
+                    } else {
+                        self?.setNotificationStatus("Notifications: ready", color: Theme.cyan)
+                    }
                 case .denied:
-                    self?.notificationLabel.stringValue = "Notifications: denied"
-                    self?.notificationLabel.textColor = .systemRed
+                    self?.setNotificationStatus("Notifications: denied", color: .systemRed)
                 case .notDetermined:
-                    self?.notificationLabel.stringValue = "Notifications: not registered"
-                    self?.notificationLabel.textColor = .systemOrange
+                    self?.setNotificationStatus("Notifications: needs permission", color: .systemOrange)
                 @unknown default:
-                    self?.notificationLabel.stringValue = "Notifications: unknown"
-                    self?.notificationLabel.textColor = .secondaryLabelColor
+                    self?.setNotificationStatus("Notifications: unknown", color: .secondaryLabelColor)
                 }
             }
         }
+    }
+
+    func setNotificationStatus(_ text: String, color: NSColor) {
+        notificationLabel.stringValue = text
+        notificationLabel.textColor = color
     }
 
     private func rebuildInbox() {
@@ -1296,6 +1302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        registerBundleWithLaunchServices()
         configureNotifications(requestPermission: true)
         configurePopover()
         configureStatusItem()
@@ -1305,13 +1312,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    private func registerBundleWithLaunchServices() {
+        let url = Bundle.main.bundleURL as CFURL
+        _ = LSRegisterURL(url, true)
+    }
+
     private func configureNotifications(requestPermission: Bool) {
         let replay = UNNotificationAction(identifier: "REPLAY_LAST", title: "Replay", options: [])
         let category = UNNotificationCategory(identifier: "VOICE_MESSAGE", actions: [replay], intentIdentifiers: [])
         UNUserNotificationCenter.current().setNotificationCategories([category])
         UNUserNotificationCenter.current().delegate = self
         if requestPermission {
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
                 if let error {
                     NSLog("Agent Voice Bar notification auth error: \(error.localizedDescription)")
                 }
@@ -1519,12 +1531,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func deliverNotification(for item: VoiceItem) {
         NSLog("Agent Voice Bar delivering notification for item \(item.id ?? "no-id")")
         UNUserNotificationCenter.current().getNotificationSettings { settings in
-            if settings.authorizationStatus == .denied {
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                if settings.alertSetting == .disabled {
+                    NSLog("Agent Voice Bar native notification alerts disabled; using fallback")
+                    DispatchQueue.main.async {
+                        self.popoverController.setNotificationStatus("Notifications: alerts off - fallback", color: .systemOrange)
+                    }
+                    _ = self.deliverTerminalNotification(for: item)
+                    return
+                }
+                self.deliverNativeNotification(for: item)
+            case .notDetermined:
+                self.configureNotifications(requestPermission: true)
+                DispatchQueue.main.async {
+                    self.popoverController.setNotificationStatus("Notifications: permission requested", color: .systemOrange)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    self.deliverNotification(for: item)
+                }
+            case .denied:
+                DispatchQueue.main.async {
+                    self.popoverController.setNotificationStatus("Notifications: denied - fallback", color: .systemRed)
+                }
                 _ = self.deliverTerminalNotification(for: item)
-                return
+            @unknown default:
+                DispatchQueue.main.async {
+                    self.popoverController.setNotificationStatus("Notifications: unknown - fallback", color: .systemOrange)
+                }
+                _ = self.deliverTerminalNotification(for: item)
             }
-
-            self.deliverNativeNotification(for: item)
         }
     }
 
@@ -1536,13 +1572,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         content.sound = .default
         content.categoryIdentifier = "VOICE_MESSAGE"
         content.userInfo = ["file": item.file ?? ""]
+        content.threadIdentifier = item.source ?? "Agent Voice Bar"
+        if #available(macOS 12.0, *) {
+            content.interruptionLevel = .active
+        }
         let request = UNNotificationRequest(identifier: item.id ?? UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             if let error {
                 NSLog("Agent Voice Bar notification error: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self.popoverController.setNotificationStatus("Notifications: native failed - fallback", color: .systemOrange)
+                }
                 _ = self.deliverTerminalNotification(for: item)
             } else {
                 NSLog("Agent Voice Bar UN notification accepted")
+                DispatchQueue.main.async {
+                    self.popoverController.setNotificationStatus("Notifications: sent", color: Theme.green)
+                }
             }
         }
     }
@@ -1598,9 +1644,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         ]
         do {
             try process.run()
-            return true
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                DispatchQueue.main.async {
+                    self.popoverController.setNotificationStatus("Notifications: fallback sent", color: Theme.green)
+                }
+                return true
+            }
+            NSLog("Agent Voice Bar terminal-notifier exited with status \(process.terminationStatus)")
+            DispatchQueue.main.async {
+                self.popoverController.setNotificationStatus("Notifications: fallback failed", color: .systemRed)
+            }
+            return false
         } catch {
             NSLog("Agent Voice Bar terminal-notifier error: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                self.popoverController.setNotificationStatus("Notifications: fallback failed", color: .systemRed)
+            }
             return false
         }
     }
@@ -1696,6 +1756,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func openNotificationSettings() {
         let urls = [
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.collincraig.agentvoicebar",
             "x-apple.systempreferences:com.apple.preference.notifications",
             "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
         ]

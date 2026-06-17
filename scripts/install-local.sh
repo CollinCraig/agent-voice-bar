@@ -10,6 +10,7 @@ rm -rf "$DEST"
 cp -R "$APP" "$DEST"
 xattr -cr "$DEST" || true
 codesign --force --deep --sign - "$DEST" >/dev/null
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$DEST" >/dev/null 2>&1 || true
 open "$DEST"
 
 echo "$DEST"
