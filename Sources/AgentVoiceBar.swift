@@ -102,6 +102,14 @@ struct VoiceItem: Codable {
         if !trimmedTitle.isEmpty { return trimmedTitle }
         return String((text ?? "Voice message").prefix(72))
     }
+
+    var displayBodyText: String {
+        if status == "failed", let error {
+            return "Failed to render audio: \(error)"
+        }
+        let trimmed = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "No message body." : trimmed
+    }
 }
 
 struct VoiceState: Codable {
@@ -156,6 +164,14 @@ func playbackFooterText(_ event: PlaybackEvent?) -> String? {
         return "\(label) \(time) - \(detail)"
     }
     return "\(label) \(time)"
+}
+
+func playbackFooterText(_ event: PlaybackEvent?, isPlaying: Bool) -> String? {
+    guard let event else { return nil }
+    if event.event == "started" && !isPlaying {
+        return nil
+    }
+    return playbackFooterText(event)
 }
 
 func playbackDetailText(_ event: PlaybackEvent?) -> String? {
@@ -418,62 +434,64 @@ final class BubbleRow: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.cornerRadius = 10
-        layer?.backgroundColor = Theme.panel.cgColor
-        layer?.borderColor = color(for: item.status, isPlaying: isPlaying).withAlphaComponent(0.56).cgColor
+        layer?.backgroundColor = rowBackground(isPlaying: isPlaying).cgColor
+        layer?.borderColor = color(for: item.status, isPlaying: isPlaying).withAlphaComponent(isPlaying ? 0.76 : 0.34).cgColor
         layer?.borderWidth = 1
 
         let root = NSStackView()
         root.orientation = .horizontal
         root.alignment = .top
-        root.spacing = 9
-        root.edgeInsets = NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
+        root.spacing = 10
+        root.edgeInsets = NSEdgeInsets(top: 11, left: 11, bottom: 11, right: 12)
         root.translatesAutoresizingMaskIntoConstraints = false
 
         let avatar = NSView()
         avatar.translatesAutoresizingMaskIntoConstraints = false
         avatar.wantsLayer = true
-        avatar.layer?.cornerRadius = 14
-        avatar.layer?.backgroundColor = color(for: item.status, isPlaying: isPlaying).withAlphaComponent(0.24).cgColor
-        avatar.layer?.borderColor = color(for: item.status, isPlaying: isPlaying).withAlphaComponent(0.72).cgColor
+        avatar.layer?.cornerRadius = 13
+        avatar.layer?.backgroundColor = color(for: item.status, isPlaying: isPlaying).withAlphaComponent(0.16).cgColor
+        avatar.layer?.borderColor = color(for: item.status, isPlaying: isPlaying).withAlphaComponent(0.62).cgColor
         avatar.layer?.borderWidth = 1
         NSLayoutConstraint.activate([
-            avatar.widthAnchor.constraint(equalToConstant: 28),
-            avatar.heightAnchor.constraint(equalToConstant: 28),
+            avatar.widthAnchor.constraint(equalToConstant: 26),
+            avatar.heightAnchor.constraint(equalToConstant: 26),
         ])
 
-        let glyph = NSTextField(labelWithString: glyphText(for: item, isPlaying: isPlaying))
-        glyph.font = .monospacedSystemFont(ofSize: 11, weight: .bold)
-        glyph.textColor = color(for: item.status, isPlaying: isPlaying)
-        glyph.alignment = .center
+        let glyph = NSImageView(image: glyphImage(for: item, isPlaying: isPlaying))
+        glyph.contentTintColor = color(for: item.status, isPlaying: isPlaying)
+        glyph.imageScaling = .scaleProportionallyDown
         glyph.translatesAutoresizingMaskIntoConstraints = false
         avatar.addSubview(glyph)
         NSLayoutConstraint.activate([
             glyph.centerXAnchor.constraint(equalTo: avatar.centerXAnchor),
             glyph.centerYAnchor.constraint(equalTo: avatar.centerYAnchor),
+            glyph.widthAnchor.constraint(equalToConstant: 12),
+            glyph.heightAnchor.constraint(equalToConstant: 12),
         ])
 
-        let bubble = NSStackView()
-        bubble.orientation = .vertical
-        bubble.spacing = 6
-        bubble.edgeInsets = NSEdgeInsets(top: 9, left: 11, bottom: 9, right: 11)
-        bubble.translatesAutoresizingMaskIntoConstraints = false
-        bubble.wantsLayer = true
-        bubble.layer?.cornerRadius = 9
-        bubble.layer?.backgroundColor = Theme.bubble.cgColor
+        let content = NSStackView()
+        content.orientation = .vertical
+        content.spacing = 5
+        content.translatesAutoresizingMaskIntoConstraints = false
 
-        let header = NSTextField(labelWithString: metaText(for: item, isPlaying: isPlaying))
-        header.font = .monospacedSystemFont(ofSize: 10.5, weight: .medium)
-        header.textColor = color(for: item.status, isPlaying: isPlaying)
+        let title = NSTextField(wrappingLabelWithString: titleText(for: item))
+        title.font = .systemFont(ofSize: 13.2, weight: .semibold)
+        title.textColor = Theme.text
+        title.maximumNumberOfLines = isExpanded ? 2 : 1
+        title.lineBreakMode = .byTruncatingTail
 
-        let body = NSTextField(wrappingLabelWithString: item.displayText)
-        body.font = .systemFont(ofSize: 12.8, weight: .regular)
+        let body = NSTextField(wrappingLabelWithString: bodyText(for: item))
+        body.font = .systemFont(ofSize: 12.2, weight: .regular)
         body.textColor = Theme.text
+        body.alphaValue = 0.88
         body.maximumNumberOfLines = isExpanded ? 0 : 2
         body.lineBreakMode = isExpanded ? .byWordWrapping : .byTruncatingTail
 
         let footer = NSTextField(labelWithString: footerText(for: item, isPlaying: isPlaying, isExpanded: isExpanded, playbackSummary: playbackSummary))
-        footer.font = .systemFont(ofSize: 11, weight: .medium)
+        footer.font = .systemFont(ofSize: 10.8, weight: .medium)
         footer.textColor = isPlaying ? Theme.playing : Theme.muted
+        footer.maximumNumberOfLines = 1
+        footer.lineBreakMode = .byTruncatingTail
 
         let overlay = ReplayBubbleButton(title: "", target: target, action: action)
         overlay.isBordered = false
@@ -486,22 +504,22 @@ final class BubbleRow: NSView {
         addSubview(root)
         addSubview(overlay)
         root.addArrangedSubview(avatar)
-        root.addArrangedSubview(bubble)
-        bubble.addArrangedSubview(header)
-        bubble.addArrangedSubview(body)
-        bubble.addArrangedSubview(footer)
+        root.addArrangedSubview(content)
+        content.addArrangedSubview(title)
+        content.addArrangedSubview(body)
+        content.addArrangedSubview(footer)
 
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: leadingAnchor),
             root.trailingAnchor.constraint(equalTo: trailingAnchor),
             root.topAnchor.constraint(equalTo: topAnchor),
             root.bottomAnchor.constraint(equalTo: bottomAnchor),
-            bubble.widthAnchor.constraint(equalToConstant: bubbleWidth),
+            content.widthAnchor.constraint(equalToConstant: bubbleWidth),
             overlay.leadingAnchor.constraint(equalTo: leadingAnchor),
             overlay.trailingAnchor.constraint(equalTo: trailingAnchor),
             overlay.topAnchor.constraint(equalTo: topAnchor),
             overlay.bottomAnchor.constraint(equalTo: bottomAnchor),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 84),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 76),
         ])
     }
 
@@ -509,31 +527,38 @@ final class BubbleRow: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private func metaText(for item: VoiceItem, isPlaying: Bool) -> String {
-        let source = (item.source ?? "agent").uppercased()
-        let mode = item.mode?.capitalized ?? "Message"
-        let status = isPlaying ? "Playing" : (item.status?.capitalized ?? "Queued")
-        let priority = (item.priority ?? "normal").uppercased()
-        return priority == "NORMAL" ? "\(source) / \(mode) / \(status)" : "\(priority) / \(source) / \(status)"
+    private func titleText(for item: VoiceItem) -> String {
+        item.displayTitle
     }
 
     private func bodyText(for item: VoiceItem) -> String {
-        return item.displayText
+        item.displayBodyText
     }
 
-    private func glyphText(for item: VoiceItem, isPlaying: Bool) -> String {
-        if isPlaying { return "||" }
-        if item.status == "queued" { return ".." }
-        return item.status == "ready" ? ">" : "..."
+    private func glyphImage(for item: VoiceItem, isPlaying: Bool) -> NSImage {
+        let name: String
+        if isPlaying {
+            name = "speaker.wave.2.fill"
+        } else {
+            switch item.status {
+            case "queued", "generating": name = "clock.fill"
+            case "failed": name = "exclamationmark.triangle.fill"
+            default: name = item.file == nil ? "text.bubble.fill" : "play.fill"
+            }
+        }
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? NSImage()
     }
 
     private func footerText(for item: VoiceItem, isPlaying: Bool, isExpanded: Bool, playbackSummary: String?) -> String {
         if isPlaying { return "Playing now - click to stop" }
-        if let playbackSummary { return "\(playbackSummary) - click to replay" }
-        if isExpanded && item.file != nil { return "Full prompt shown - click to replay" }
-        if isExpanded { return "Full prompt shown" }
-        if item.source == "app" && item.file == nil { return "Notification only" }
-        return item.file == nil ? "Click to expand" : "Click to replay"
+        let source = (item.source ?? "agent").trimmingCharacters(in: .whitespacesAndNewlines)
+        let mode = displayMode(item.mode)
+        let priority = (item.priority ?? "normal").lowercased() == "normal" ? nil : item.priority?.uppercased()
+        let status = playbackSummary ?? statusText(for: item)
+        let action = item.file == nil ? (isExpanded ? "shown" : "click to expand") : "click to replay"
+        return [priority, source.isEmpty ? "agent" : source, mode, status, action]
+            .compactMap { $0 }
+            .joined(separator: "  •  ")
     }
 
     private func color(for status: String?, isPlaying: Bool) -> NSColor {
@@ -544,6 +569,32 @@ final class BubbleRow: NSView {
         case "generating": return .systemOrange
         case "failed": return .systemRed
         default: return Theme.muted
+        }
+    }
+
+    private func rowBackground(isPlaying: Bool) -> NSColor {
+        if isPlaying {
+            return NSColor(red: 0.075, green: 0.105, blue: 0.125, alpha: 1)
+        }
+        return NSColor(red: 0.062, green: 0.076, blue: 0.088, alpha: 1)
+    }
+
+    private func displayMode(_ mode: String?) -> String {
+        switch mode {
+        case "autoplay": return "Speak"
+        case "notify": return "Notify"
+        case "silent": return "DND"
+        default: return "Message"
+        }
+    }
+
+    private func statusText(for item: VoiceItem) -> String {
+        switch item.status {
+        case "ready": return item.file == nil ? "Saved" : "Ready"
+        case "queued": return "Queued"
+        case "generating": return "Rendering"
+        case "failed": return "Failed"
+        default: return item.status?.capitalized ?? "Saved"
         }
     }
 }
@@ -800,7 +851,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
                 isPlaying: item.file == playingFile,
                 isExpanded: isExpanded,
                 bubbleWidth: bubbleWidth,
-                playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }),
+                playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }, isPlaying: item.file == playingFile),
                 target: self,
                 action: #selector(messageTapped(_:))
             )
@@ -812,14 +863,14 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
     }
 
     private func height(for item: VoiceItem, width: CGFloat, isExpanded: Bool) -> CGFloat {
-        if !isExpanded { return 92 }
+        if !isExpanded { return 86 }
         let bubbleWidth = min(420, max(300, width - 74))
-        let bodyHeight = item.displayText.boundingRect(
+        let bodyHeight = item.displayBodyText.boundingRect(
             with: NSSize(width: bubbleWidth - 22, height: 1600),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: NSFont.systemFont(ofSize: 12.8, weight: .regular)]
+            attributes: [.font: NSFont.systemFont(ofSize: 12.2, weight: .regular)]
         ).height
-        return min(360, max(124, ceil(bodyHeight) + 74))
+        return min(340, max(118, ceil(bodyHeight) + 78))
     }
 
     private func updateDetail() {
@@ -1097,7 +1148,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         statusLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
         statusLabel.textColor = Theme.muted
 
-        let deliveryLabel = NSTextField(labelWithString: "Delivery")
+        let deliveryLabel = NSTextField(labelWithString: "Mode")
         deliveryLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
         deliveryLabel.textColor = Theme.muted
         modeControl.controlSize = .small
@@ -1123,7 +1174,6 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         voiceSummary.addArrangedSubview(voiceSummarySpacer)
         voiceSummary.addArrangedSubview(tuneButton)
         voiceSummary.addArrangedSubview(speakTestButton)
-        root.addArrangedSubview(panel(voiceSummary, fill: false, padding: 8))
 
         let inboxSectionHeader = NSStackView()
         inboxSectionHeader.orientation = .vertical
@@ -1242,13 +1292,14 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         inboxPanel.layer?.borderWidth = 1
         inboxPanel.addSubview(inboxScrollView)
         NSLayoutConstraint.activate([
-            inboxPanel.heightAnchor.constraint(equalToConstant: 390),
+            inboxPanel.heightAnchor.constraint(equalToConstant: 430),
             inboxScrollView.leadingAnchor.constraint(equalTo: inboxPanel.leadingAnchor, constant: 10),
             inboxScrollView.trailingAnchor.constraint(equalTo: inboxPanel.trailingAnchor, constant: -10),
             inboxScrollView.topAnchor.constraint(equalTo: inboxPanel.topAnchor, constant: 10),
             inboxScrollView.bottomAnchor.constraint(equalTo: inboxPanel.bottomAnchor, constant: -10),
         ])
         root.addArrangedSubview(inboxPanel)
+        root.addArrangedSubview(panel(voiceSummary, fill: false, padding: 8))
 
         let controlsShell = NSStackView()
         controlsShell.orientation = .vertical
@@ -1519,7 +1570,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
                 isPlaying: item.file == playingFile,
                 isExpanded: isExpanded,
                 bubbleWidth: bubbleWidth,
-                playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }),
+                playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }, isPlaying: item.file == playingFile),
                 target: self,
                 action: #selector(replayBubble(_:))
             )
@@ -1643,16 +1694,16 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     }
 
     private func height(for item: VoiceItem, width: CGFloat, isExpanded: Bool) -> CGFloat {
-        if !isExpanded { return 92 }
-        let text = item.displayText
+        if !isExpanded { return 86 }
+        let text = item.displayBodyText
         let bubbleWidth = max(300, width - 74)
         let bodyWidth = bubbleWidth - 22
         let bodyHeight = text.boundingRect(
             with: NSSize(width: bodyWidth, height: 1000),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: NSFont.systemFont(ofSize: 12.8, weight: .regular)]
+            attributes: [.font: NSFont.systemFont(ofSize: 12.2, weight: .regular)]
         ).height
-        return min(280, max(124, ceil(bodyHeight) + 68))
+        return min(280, max(116, ceil(bodyHeight) + 76))
     }
 
     @objc private func replayBubble(_ sender: ReplayBubbleButton) {
