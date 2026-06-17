@@ -1,0 +1,8 @@
+{
+  "max_chars": 1200,
+  "mode": "autoplay",
+  "speed": "1.35",
+  "temperature": "0.45",
+  "top_p": "0.85",
+  "voice": "Chelsie"
+}
