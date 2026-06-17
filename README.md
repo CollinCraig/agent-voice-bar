@@ -30,6 +30,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - per-source delivery rules for Speak/Notify/DND behavior
 - expandable full-message bubbles during replay
 - playback audit trail for local audio start/finish/failure events
+- playback status shown on message rows and Dashboard detail
 - unread menu-bar count and archive/clear actions
 - Setup Doctor report for notification, fallback, backend, and mode checks
 - macOS notification fallback through `terminal-notifier`
@@ -65,6 +66,7 @@ Use it for:
 - Clears stale playback state if macOS audio startup or finish callbacks misbehave.
 - Records local playback attempts so Doctor can show whether audio started,
   finished, stopped, or failed.
+- Shows the latest local playback result on replayable messages.
 - Works with remote agents through a reverse SSH tunnel to your Mac.
 
 ## Architecture

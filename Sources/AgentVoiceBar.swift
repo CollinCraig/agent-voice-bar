@@ -121,6 +121,61 @@ struct PlaybackEvent: Codable {
     var rate: Float?
 }
 
+func shortPlaybackTime(_ value: String) -> String {
+    let parser = ISO8601DateFormatter()
+    guard let date = parser.date(from: value) else { return value }
+    let formatter = DateFormatter()
+    formatter.dateStyle = .none
+    formatter.timeStyle = .short
+    return formatter.string(from: date)
+}
+
+func displayPlaybackEvent(_ event: String) -> String {
+    switch event {
+    case "started": return "Started"
+    case "finished", "watchdog_finished": return "Played"
+    case "stopped": return "Stopped"
+    case "missing_file": return "Missing audio"
+    case "failed_load": return "Load failed"
+    case "failed_start": return "Start failed"
+    case "decode_failed": return "Decode failed"
+    default: return event.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
+func playbackFooterText(_ event: PlaybackEvent?) -> String? {
+    guard let event else { return nil }
+    let label = displayPlaybackEvent(event.event)
+    let time = shortPlaybackTime(event.at)
+    if let rate = event.rate, ["started", "finished", "watchdog_finished"].contains(event.event) {
+        return "\(label) \(time) at \(String(format: "%.2f", rate))x"
+    }
+    if let detail = event.detail, !detail.isEmpty {
+        return "\(label) \(time) - \(detail)"
+    }
+    return "\(label) \(time)"
+}
+
+func playbackDetailText(_ event: PlaybackEvent?) -> String? {
+    guard let event else { return nil }
+    var parts = [
+        "\(displayPlaybackEvent(event.event)) at \(shortPlaybackTime(event.at))",
+    ]
+    if let rate = event.rate {
+        parts.append("Rate: \(String(format: "%.2f", rate))x")
+    }
+    if let duration = event.duration {
+        parts.append("Duration: \(String(format: "%.2f", duration))s")
+    }
+    if let detail = event.detail, !detail.isEmpty {
+        parts.append("Detail: \(detail)")
+    }
+    if let file = event.file, !file.isEmpty {
+        parts.append("File: \(file)")
+    }
+    return parts.joined(separator: "\n")
+}
+
 struct VoiceCommand: Codable {
     var command: String
     var text: String?
@@ -263,6 +318,20 @@ final class VoiceStore {
         }.reversed()
     }
 
+    func latestPlaybackEvent(for item: VoiceItem) -> PlaybackEvent? {
+        guard let file = item.file else { return nil }
+        return latestPlaybackEventsByFile()[file]
+    }
+
+    func latestPlaybackEventsByFile() -> [String: PlaybackEvent] {
+        var events: [String: PlaybackEvent] = [:]
+        for event in recentPlaybackEvents(limit: 0) {
+            guard let file = event.file, events[file] == nil else { continue }
+            events[file] = event
+        }
+        return events
+    }
+
     func clearInbox() {
         try? "".write(to: queueURL, atomically: true, encoding: .utf8)
         let state = VoiceState(last: nil, updated_at: ISO8601DateFormatter().string(from: Date()), config: readConfig())
@@ -341,7 +410,7 @@ final class InboxDocumentView: NSView {
 final class BubbleRow: NSView {
     let item: VoiceItem
 
-    init(item: VoiceItem, isPlaying: Bool, isExpanded: Bool, bubbleWidth: CGFloat, target: AnyObject, action: Selector) {
+    init(item: VoiceItem, isPlaying: Bool, isExpanded: Bool, bubbleWidth: CGFloat, playbackSummary: String?, target: AnyObject, action: Selector) {
         self.item = item
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -400,7 +469,7 @@ final class BubbleRow: NSView {
         body.maximumNumberOfLines = isExpanded ? 0 : 2
         body.lineBreakMode = isExpanded ? .byWordWrapping : .byTruncatingTail
 
-        let footer = NSTextField(labelWithString: footerText(for: item, isPlaying: isPlaying, isExpanded: isExpanded))
+        let footer = NSTextField(labelWithString: footerText(for: item, isPlaying: isPlaying, isExpanded: isExpanded, playbackSummary: playbackSummary))
         footer.font = .systemFont(ofSize: 11, weight: .medium)
         footer.textColor = isPlaying ? Theme.playing : Theme.muted
 
@@ -456,8 +525,9 @@ final class BubbleRow: NSView {
         return item.status == "ready" ? ">" : "..."
     }
 
-    private func footerText(for item: VoiceItem, isPlaying: Bool, isExpanded: Bool) -> String {
+    private func footerText(for item: VoiceItem, isPlaying: Bool, isExpanded: Bool, playbackSummary: String?) -> String {
         if isPlaying { return "Playing now - click to stop" }
+        if let playbackSummary { return "\(playbackSummary) - click to replay" }
         if isExpanded && item.file != nil { return "Full prompt shown - click to replay" }
         if isExpanded { return "Full prompt shown" }
         if item.source == "app" && item.file == nil { return "Notification only" }
@@ -691,6 +761,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         }
         let allItems = store.recentItems(limit: 0)
         let items = filteredItems(allItems)
+        let playbackByFile = store.latestPlaybackEventsByFile()
         resultCountLabel.stringValue = countText(shown: items.count, total: allItems.count)
         let width: CGFloat = max(480, listScrollView.contentSize.width)
         if items.isEmpty {
@@ -707,7 +778,15 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
             let isExpanded = item.stableKey == selectedItemKey
             let bubbleWidth = min(420, max(300, width - 74))
             let rowHeight = height(for: item, width: width, isExpanded: isExpanded)
-            let row = BubbleRow(item: item, isPlaying: item.file == playingFile, isExpanded: isExpanded, bubbleWidth: bubbleWidth, target: self, action: #selector(messageTapped(_:)))
+            let row = BubbleRow(
+                item: item,
+                isPlaying: item.file == playingFile,
+                isExpanded: isExpanded,
+                bubbleWidth: bubbleWidth,
+                playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }),
+                target: self,
+                action: #selector(messageTapped(_:))
+            )
             row.frame = NSRect(x: 0, y: y, width: width, height: rowHeight)
             listDocument.addSubview(row)
             y += rowHeight + 8
@@ -742,7 +821,11 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         let mode = (item.mode ?? "message").uppercased()
         let created = item.created_at ?? "unknown time"
         detailMeta.stringValue = "\(source) / \(mode) / \(status) / \(created)"
-        detailText.string = item.displayText
+        if let playbackDetail = playbackDetailText(store.latestPlaybackEvent(for: item)) {
+            detailText.string = "\(item.displayText)\n\nPlayback\n\(playbackDetail)"
+        } else {
+            detailText.string = item.displayText
+        }
         replayButton.isEnabled = item.file != nil
         archiveButton.isEnabled = true
     }
@@ -1390,12 +1473,21 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
             return
         }
         var y: CGFloat = 0
+        let playbackByFile = store.latestPlaybackEventsByFile()
         for item in items {
             let itemKey = item.stableKey
             let isExpanded = itemKey == expandedItemID
             let bubbleWidth = max(300, width - 74)
             let rowHeight = height(for: item, width: width, isExpanded: isExpanded)
-            let row = BubbleRow(item: item, isPlaying: item.file == playingFile, isExpanded: isExpanded, bubbleWidth: bubbleWidth, target: self, action: #selector(replayBubble(_:)))
+            let row = BubbleRow(
+                item: item,
+                isPlaying: item.file == playingFile,
+                isExpanded: isExpanded,
+                bubbleWidth: bubbleWidth,
+                playbackSummary: playbackFooterText(item.file.flatMap { playbackByFile[$0] }),
+                target: self,
+                action: #selector(replayBubble(_:))
+            )
             row.translatesAutoresizingMaskIntoConstraints = true
             row.frame = NSRect(x: 0, y: y, width: width, height: rowHeight)
             inboxDocument.addSubview(row)
