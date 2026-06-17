@@ -706,6 +706,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     private let notificationLabel = NSTextField(labelWithString: "Notifications: checking")
     private let controlsTitle = NSTextField(labelWithString: "Voice & Delivery")
     private let inboxCountLabel = NSTextField(labelWithString: "0 messages")
+    private let notificationTitleLabel = NSTextField(labelWithString: "System")
     private let modeChip = ChipView("MODE", color: Theme.cyan)
     private let voiceChip = ChipView("VOICE", color: Theme.green)
     private let talkChip = ChipView("TALK", color: Theme.playing)
@@ -746,8 +747,9 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     private func buildUI() {
         let root = NSStackView()
         root.orientation = .vertical
-        root.spacing = 12
-        root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 16, right: 18)
+        root.spacing = 10
+        root.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 14, right: 18)
+        root.detachesHiddenViews = true
         root.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(root)
         NSLayoutConstraint.activate([
@@ -923,6 +925,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         controls.addArrangedSubview(sliderRow("Variety", topPSlider, topPValueLabel, labelWidth: 62))
         controlsShell.addArrangedSubview(controls)
         let tuningPanel = panel(controlsShell, fill: false)
+        tuningPanel.setContentHuggingPriority(.required, for: .vertical)
         tuningPanel.isHidden = !tuningVisible
         controlsPanel = tuningPanel
         root.addArrangedSubview(tuningPanel)
@@ -949,10 +952,13 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         notifyRow.orientation = .horizontal
         notifyRow.alignment = .centerY
         notifyRow.spacing = 8
+        notificationTitleLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        notificationTitleLabel.textColor = Theme.muted
         notificationLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
         notificationLabel.textColor = Theme.muted
         let notifySpacer = NSView()
         notifySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        notifyRow.addArrangedSubview(notificationTitleLabel)
         notifyRow.addArrangedSubview(statusLabel)
         notifyRow.addArrangedSubview(notificationLabel)
         notifyRow.addArrangedSubview(notifySpacer)
@@ -968,6 +974,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
 
         let bottom = NSStackView()
         bottom.orientation = .horizontal
+        bottom.alignment = .centerY
         bottom.spacing = 8
         for (label, action) in [
             ("Notify Settings", #selector(openNotificationSettingsTapped)),
@@ -982,7 +989,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         root.addArrangedSubview(bottom)
 
         let footer = NSTextField(labelWithString: "Open-source ready: local-first, MCP-friendly, no cloud account required.")
-        footer.font = .systemFont(ofSize: 11, weight: .medium)
+        footer.font = .systemFont(ofSize: 10.5, weight: .medium)
         footer.textColor = Theme.muted
         root.addArrangedSubview(footer)
     }
@@ -1145,7 +1152,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
         for item in items {
             let itemKey = item.stableKey
             let isExpanded = itemKey == expandedItemID
-            let bubbleWidth = min(380, max(260, width - 74))
+            let bubbleWidth = max(300, width - 74)
             let rowHeight = height(for: item, width: width, isExpanded: isExpanded)
             let row = BubbleRow(item: item, isPlaying: item.file == playingFile, isExpanded: isExpanded, bubbleWidth: bubbleWidth, target: self, action: #selector(replayBubble(_:)))
             row.translatesAutoresizingMaskIntoConstraints = true
@@ -1194,7 +1201,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate {
     private func height(for item: VoiceItem, width: CGFloat, isExpanded: Bool) -> CGFloat {
         if !isExpanded { return 92 }
         let text = item.displayText
-        let bubbleWidth = min(380, max(260, width - 74))
+        let bubbleWidth = max(300, width - 74)
         let bodyWidth = bubbleWidth - 22
         let bodyHeight = text.boundingRect(
             with: NSSize(width: bodyWidth, height: 1000),
