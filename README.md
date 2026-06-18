@@ -40,6 +40,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - playback audit trail for local audio start/finish/failure events
 - playback status shown on message rows and Dashboard detail
 - unread menu-bar count and archive/clear actions
+- animated menu-bar open/close, live status pulse, and row hover/playback motion
 - Setup Doctor report for notification, fallback, backend, audio, and mode checks
 - macOS notification fallback through `terminal-notifier`
 - optional remote use over reverse SSH

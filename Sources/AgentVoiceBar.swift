@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import CoreServices
 import Foundation
+import QuartzCore
 import Speech
 import UserNotifications
 
@@ -17,6 +18,12 @@ enum Theme {
     static let playing = NSColor(red: 0.360, green: 0.730, blue: 1.000, alpha: 1)
     static let text = NSColor(red: 0.925, green: 0.955, blue: 0.970, alpha: 1)
     static let muted = NSColor(red: 0.595, green: 0.655, blue: 0.690, alpha: 1)
+}
+
+enum Motion {
+    static let quick: CFTimeInterval = 0.16
+    static let medium: CFTimeInterval = 0.24
+    static let easeOut = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
 }
 
 struct VoiceConfig: Codable {
@@ -527,6 +534,147 @@ final class InboxDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
 
+final class AmbientPanelView: NSView {
+    override var isOpaque: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        Theme.background.setFill()
+        bounds.fill()
+
+        let topBand = NSRect(x: 0, y: bounds.height - 112, width: bounds.width, height: 112)
+        NSGradient(colors: [
+            Theme.cyan.withAlphaComponent(0.12),
+            Theme.green.withAlphaComponent(0.035),
+            Theme.background.withAlphaComponent(0.0),
+        ])?.draw(in: topBand, angle: -90)
+
+        Theme.cyan.withAlphaComponent(0.18).setFill()
+        NSBezierPath(rect: NSRect(x: 22, y: bounds.height - 1.5, width: bounds.width * 0.46, height: 1)).fill()
+        Theme.green.withAlphaComponent(0.10).setFill()
+        NSBezierPath(rect: NSRect(x: bounds.width * 0.58, y: bounds.height - 1.5, width: bounds.width * 0.26, height: 1)).fill()
+    }
+}
+
+final class PulseStatusDotView: NSView {
+    private let color: NSColor
+    private let size: CGFloat
+    private let pulseLayer = CALayer()
+
+    init(color: NSColor, size: CGFloat = 12) {
+        self.color = color
+        self.size = size
+        super.init(frame: NSRect(x: 0, y: 0, width: size, height: size))
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.backgroundColor = color.cgColor
+        layer?.cornerRadius = size / 2
+        layer?.shadowColor = color.cgColor
+        layer?.shadowOpacity = 0.55
+        layer?.shadowRadius = 8
+        layer?.shadowOffset = .zero
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: size),
+            heightAnchor.constraint(equalToConstant: size),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        pulseLayer.frame = bounds
+        pulseLayer.cornerRadius = bounds.width / 2
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        startPulse()
+    }
+
+    private func startPulse() {
+        pulseLayer.removeFromSuperlayer()
+        pulseLayer.backgroundColor = color.cgColor
+        pulseLayer.opacity = 0.28
+        layer?.insertSublayer(pulseLayer, at: 0)
+
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.9
+        scale.toValue = 2.35
+
+        let opacity = CABasicAnimation(keyPath: "opacity")
+        opacity.fromValue = 0.34
+        opacity.toValue = 0.0
+
+        let group = CAAnimationGroup()
+        group.animations = [scale, opacity]
+        group.duration = 1.9
+        group.repeatCount = .infinity
+        group.timingFunction = Motion.easeOut
+        pulseLayer.add(group, forKey: "pulse")
+    }
+}
+
+final class AgentIconView: NSView {
+    private let imageView = NSImageView()
+    private let haloLayer = CALayer()
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 46, height: 46))
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.backgroundColor = Theme.elevated.cgColor
+        layer?.shadowColor = Theme.cyan.cgColor
+        layer?.shadowOpacity = 0.22
+        layer?.shadowRadius = 14
+        layer?.shadowOffset = .zero
+
+        haloLayer.backgroundColor = Theme.cyan.withAlphaComponent(0.16).cgColor
+        haloLayer.cornerRadius = 18
+        layer?.addSublayer(haloLayer)
+
+        imageView.image = NSImage(named: "AgentVoiceBarIcon")
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(imageView)
+
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: 46),
+            heightAnchor.constraint(equalToConstant: 46),
+            imageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            imageView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            imageView.topAnchor.constraint(equalTo: topAnchor, constant: 7),
+            imageView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -7),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        haloLayer.frame = bounds.insetBy(dx: 5, dy: 5)
+        haloLayer.cornerRadius = haloLayer.bounds.width / 2
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        let glow = CABasicAnimation(keyPath: "shadowOpacity")
+        glow.fromValue = 0.16
+        glow.toValue = 0.36
+        glow.duration = 2.4
+        glow.autoreverses = true
+        glow.repeatCount = .infinity
+        glow.timingFunction = Motion.easeOut
+        layer?.add(glow, forKey: "softGlow")
+    }
+}
+
 final class EmptyStateView: NSView {
     init(symbolName: String, title: String, message: String, width: CGFloat) {
         super.init(frame: NSRect(x: 0, y: 0, width: width, height: 156))
@@ -578,16 +726,27 @@ final class EmptyStateView: NSView {
 
 final class BubbleRow: NSView {
     let item: VoiceItem
+    private var baseBackground = Theme.panel
+    private var accentColor = Theme.muted
+    private var active = false
+    private var trackingAreaRef: NSTrackingArea?
 
     init(item: VoiceItem, isPlaying: Bool, isExpanded: Bool, bubbleWidth: CGFloat, playbackSummary: String?, playsOnClick: Bool, target: AnyObject, action: Selector) {
         self.item = item
         super.init(frame: .zero)
+        accentColor = color(for: item.status, isPlaying: isPlaying)
+        baseBackground = rowBackground(isPlaying: isPlaying, isSelected: isExpanded)
+        active = isPlaying || isExpanded
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.cornerRadius = 10
-        layer?.backgroundColor = rowBackground(isPlaying: isPlaying, isSelected: isExpanded).cgColor
-        layer?.borderColor = color(for: item.status, isPlaying: isPlaying).withAlphaComponent(isPlaying || isExpanded ? 0.76 : 0.34).cgColor
+        layer?.backgroundColor = baseBackground.cgColor
+        layer?.borderColor = accentColor.withAlphaComponent(active ? 0.76 : 0.34).cgColor
         layer?.borderWidth = 1
+        layer?.shadowColor = accentColor.cgColor
+        layer?.shadowOpacity = active ? 0.18 : 0.06
+        layer?.shadowRadius = active ? 12 : 6
+        layer?.shadowOffset = NSSize(width: 0, height: -2)
 
         let root = NSStackView()
         root.orientation = .horizontal
@@ -600,16 +759,20 @@ final class BubbleRow: NSView {
         avatar.translatesAutoresizingMaskIntoConstraints = false
         avatar.wantsLayer = true
         avatar.layer?.cornerRadius = 13
-        avatar.layer?.backgroundColor = color(for: item.status, isPlaying: isPlaying).withAlphaComponent(0.16).cgColor
-        avatar.layer?.borderColor = color(for: item.status, isPlaying: isPlaying).withAlphaComponent(0.62).cgColor
+        avatar.layer?.backgroundColor = accentColor.withAlphaComponent(0.16).cgColor
+        avatar.layer?.borderColor = accentColor.withAlphaComponent(0.62).cgColor
         avatar.layer?.borderWidth = 1
+        avatar.layer?.shadowColor = accentColor.cgColor
+        avatar.layer?.shadowOpacity = isPlaying ? 0.65 : 0.18
+        avatar.layer?.shadowRadius = isPlaying ? 10 : 5
+        avatar.layer?.shadowOffset = .zero
         NSLayoutConstraint.activate([
             avatar.widthAnchor.constraint(equalToConstant: 26),
             avatar.heightAnchor.constraint(equalToConstant: 26),
         ])
 
         let glyph = NSImageView(image: glyphImage(for: item, isPlaying: isPlaying))
-        glyph.contentTintColor = color(for: item.status, isPlaying: isPlaying)
+        glyph.contentTintColor = accentColor
         glyph.imageScaling = .scaleProportionallyDown
         glyph.translatesAutoresizingMaskIntoConstraints = false
         avatar.addSubview(glyph)
@@ -672,10 +835,75 @@ final class BubbleRow: NSView {
             overlay.bottomAnchor.constraint(equalTo: bottomAnchor),
             heightAnchor.constraint(greaterThanOrEqualToConstant: 76),
         ])
+
+        if isPlaying || item.status == "generating" {
+            addPulse(to: avatar.layer, color: accentColor)
+        }
+        addEntranceAnimation()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingAreaRef {
+            removeTrackingArea(trackingAreaRef)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        trackingAreaRef = area
+        addTrackingArea(area)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        setHovered(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        setHovered(false)
+    }
+
+    private func setHovered(_ hovered: Bool) {
+        guard let layer else { return }
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(Motion.quick)
+        CATransaction.setAnimationTimingFunction(Motion.easeOut)
+        layer.backgroundColor = (hovered ? baseBackground.blended(withFraction: 0.16, of: accentColor) ?? baseBackground : baseBackground).cgColor
+        layer.borderColor = accentColor.withAlphaComponent(hovered || active ? 0.82 : 0.34).cgColor
+        layer.shadowOpacity = hovered ? 0.22 : (active ? 0.18 : 0.06)
+        layer.shadowRadius = hovered ? 16 : (active ? 12 : 6)
+        layer.setAffineTransform(hovered ? CGAffineTransform(scaleX: 1.008, y: 1.008) : .identity)
+        CATransaction.commit()
+    }
+
+    private func addEntranceAnimation() {
+        guard let layer else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.88
+        fade.toValue = 1.0
+        fade.duration = Motion.medium
+        fade.timingFunction = Motion.easeOut
+        layer.add(fade, forKey: "rowFade")
+    }
+
+    private func addPulse(to layer: CALayer?, color: NSColor) {
+        guard let layer else { return }
+        let pulse = CABasicAnimation(keyPath: "shadowOpacity")
+        pulse.fromValue = 0.24
+        pulse.toValue = 0.78
+        pulse.duration = 1.05
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = Motion.easeOut
+        layer.shadowColor = color.cgColor
+        layer.shadowOpacity = 0.55
+        layer.add(pulse, forKey: "avatarPulse")
     }
 
     private func titleText(for item: VoiceItem) -> String {
@@ -1352,7 +1580,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 780, height: 680))
+        view = AmbientPanelView(frame: NSRect(x: 0, y: 0, width: 780, height: 680))
         view.wantsLayer = true
         view.layer?.backgroundColor = Theme.background.cgColor
         view.layer?.cornerRadius = 14
@@ -1387,14 +1615,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         header.alignment = .centerY
         header.spacing = 12
 
-        let icon = NSImageView()
-        icon.image = NSImage(named: "AgentVoiceBarIcon")
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            icon.widthAnchor.constraint(equalToConstant: 42),
-            icon.heightAnchor.constraint(equalToConstant: 42),
-        ])
+        let icon = AgentIconView()
 
         let titleStack = NSStackView()
         titleStack.orientation = .vertical
@@ -1550,6 +1771,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         inboxPanel.layer?.cornerRadius = 8
         inboxPanel.layer?.borderColor = Theme.border.cgColor
         inboxPanel.layer?.borderWidth = 1
+        inboxPanel.layer?.shadowColor = NSColor.black.cgColor
+        inboxPanel.layer?.shadowOpacity = 0.22
+        inboxPanel.layer?.shadowRadius = 14
+        inboxPanel.layer?.shadowOffset = NSSize(width: 0, height: -3)
         inboxPanel.addSubview(inboxScrollView)
         NSLayoutConstraint.activate([
             inboxPanel.heightAnchor.constraint(equalToConstant: 458),
@@ -1673,16 +1898,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     }
 
     private func statusDot() -> NSView {
-        let dot = NSView()
-        dot.translatesAutoresizingMaskIntoConstraints = false
-        dot.wantsLayer = true
-        dot.layer?.backgroundColor = Theme.cyan.cgColor
-        dot.layer?.cornerRadius = 6
-        NSLayoutConstraint.activate([
-            dot.widthAnchor.constraint(equalToConstant: 12),
-            dot.heightAnchor.constraint(equalToConstant: 12),
-        ])
-        return dot
+        PulseStatusDotView(color: Theme.cyan)
     }
 
     private func chipLabel(_ label: NSTextField, color: NSColor) -> NSView {
@@ -1756,6 +1972,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         box.layer?.backgroundColor = Theme.panel.cgColor
         box.layer?.borderColor = Theme.border.cgColor
         box.layer?.borderWidth = 1
+        box.layer?.shadowColor = NSColor.black.cgColor
+        box.layer?.shadowOpacity = 0.18
+        box.layer?.shadowRadius = 12
+        box.layer?.shadowOffset = NSSize(width: 0, height: -3)
         content.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(content)
         NSLayoutConstraint.activate([
@@ -2808,7 +3028,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
     @objc private func togglePopover() {
         if panel.isVisible {
-            panel.orderOut(nil)
+            hidePanel()
         } else {
             popoverController.reload()
             showPanel()
@@ -2821,25 +3041,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             panel.deminiaturize(nil)
         }
         positionPanelNearStatusItem()
+        let finalFrame = panel.frame
+        let startFrame = finalFrame.offsetBy(dx: 0, dy: 10)
         unreadCount = 0
         updateIcon()
         NSApp.activate(ignoringOtherApps: true)
+        panel.alphaValue = 0
+        panel.setFrame(startFrame, display: false)
         panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Motion.medium
+            context.timingFunction = Motion.easeOut
+            panel.animator().alphaValue = 1
+            panel.animator().setFrame(finalFrame, display: true)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.panel.makeKeyAndOrderFront(nil)
         }
     }
 
+    private func hidePanel(animated: Bool = true) {
+        guard panel.isVisible else { return }
+        guard animated else {
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+            return
+        }
+        let startFrame = panel.frame
+        let endFrame = startFrame.offsetBy(dx: 0, dy: 8)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Motion.quick
+            context.timingFunction = Motion.easeOut
+            panel.animator().alphaValue = 0
+            panel.animator().setFrame(endFrame, display: true)
+        } completionHandler: {
+            self.panel.orderOut(nil)
+            self.panel.alphaValue = 1
+            self.panel.setFrame(startFrame, display: false)
+        }
+    }
+
     func windowDidResignKey(_ notification: Notification) {
         guard notification.object as? NSWindow === panel else { return }
-        panel.orderOut(nil)
+        hidePanel()
         if dashboardWindow?.isVisible != true {
             NSApp.setActivationPolicy(.accessory)
         }
     }
 
     private func showDashboard() {
-        panel.orderOut(nil)
+        hidePanel(animated: false)
         if dashboardWindow == nil {
             let controller = DashboardViewController(store: store)
             controller.onReplayFile = { [weak self] file in self?.replay(file: file) }
