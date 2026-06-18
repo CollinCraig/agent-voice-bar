@@ -29,6 +29,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - Speak/Notify/DND delivery modes
 - app-owned playback and notifications
 - serial autoplay queue to avoid readouts interrupting each other
+- batch-safe ready-event processing so rapid messages all play/notify in order
 - Skip and Stop controls for queued playback
 - visible Now/Queued playback status in the mini app and Dashboard
 - direct voice, real talk-speed, model-speed, energy, and variety controls

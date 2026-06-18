@@ -2721,6 +2721,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     private var activeNativeQuestionID: String?
     private var timer: Timer?
     private var lastSeenStateKey: String?
+    private var processedReadyItemKeys = Set<String>()
     private var lastStorageSignature: String?
     private var audioPlayer: AVAudioPlayer?
     private var playingFile: String?
@@ -2830,32 +2831,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             popoverController.reload()
             dashboardController?.reload()
         }
+        processReadyItems(initial: initial)
         guard let item = store.readState()?.last, let id = item.id else { return }
-        let key = "\(id):\(item.status ?? "")"
-        if initial {
-            lastSeenStateKey = key
-            return
-        }
-        if key != lastSeenStateKey {
-            lastSeenStateKey = key
-            if item.status == "ready" {
-                if !panel.isVisible {
-                    unreadCount += 1
-                    updateIcon()
-                }
-                switch item.mode {
-                case "autoplay":
-                    if let file = item.file, file != playingFile {
-                        enqueueAutoplay(file: file)
-                    }
-                case "notify":
-                    deliverNotification(for: item)
-                default:
-                    break
-                }
-            } else if item.status == "failed" {
-                deliverNotification(for: item)
+        lastSeenStateKey = "\(id):\(item.status ?? "")"
+    }
+
+    private func processReadyItems(initial: Bool) {
+        let items = store.recentItems(limit: 160).reversed()
+        var unreadDelta = 0
+        for item in items {
+            guard item.status == "ready" || item.status == "failed" else { continue }
+            let key = "\(item.stableKey):\(item.status ?? ""):\(item.file ?? "")"
+            guard !processedReadyItemKeys.contains(key) else { continue }
+            processedReadyItemKeys.insert(key)
+            if initial { continue }
+
+            if !panel.isVisible {
+                unreadDelta += 1
             }
+            if item.status == "failed" {
+                deliverNotification(for: item)
+                continue
+            }
+            switch item.mode {
+            case "autoplay":
+                if let file = item.file, file != playingFile {
+                    enqueueAutoplay(file: file)
+                }
+            case "notify":
+                deliverNotification(for: item)
+            default:
+                break
+            }
+        }
+        if unreadDelta > 0 {
+            unreadCount += unreadDelta
+            updateIcon()
         }
     }
 
@@ -3716,6 +3727,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         stopPlayback()
         store.clearInbox()
         lastSeenStateKey = nil
+        processedReadyItemKeys.removeAll()
         lastStorageSignature = nil
         popoverController.reload()
         dashboardController?.reload()
@@ -3725,6 +3737,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         stopPlayback()
         store.archiveItem(matching: key)
         lastSeenStateKey = nil
+        processedReadyItemKeys.removeAll()
         lastStorageSignature = nil
         popoverController.reload()
         dashboardController?.reload()
