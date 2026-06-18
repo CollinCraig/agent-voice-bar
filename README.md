@@ -34,6 +34,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - direct voice, real talk-speed, model-speed, energy, and variety controls
 - replayable scrolling inbox
 - inbox search and source/channel filtering in the mini app and Dashboard
+- question filtering with a native STT Reply action for question rows
 - per-source delivery rules for Speak/Notify/DND behavior
 - expandable full-message bubbles during replay
 - playback audit trail for local audio start/finish/failure events
@@ -88,6 +89,8 @@ Use it for:
   Agent Voice Bar does not also speak over it.
 - Can run an experimental native question prompt with Apple Speech
   transcription when you explicitly choose the Labs backend.
+- Keeps questions in the inbox as first-class rows, with a `Questions` filter and
+  optional native Reply action that saves your answer back into history.
 
 ## Architecture
 
@@ -266,6 +269,10 @@ Call this through `qwen_speech.ask_user_native`. It opens Agent Voice Bar's own
 native prompt, records with the microphone, transcribes with Apple Speech, and
 returns the answer. This path is experimental and opt-in; Spokenly remains the
 default stable backend.
+
+Questions also appear in the mini app and Dashboard under the `Questions`
+filter. Select a question and use `Reply` to answer it with the native STT
+prompt; the captured answer is saved back into the inbox as a local reply item.
 
 Full local/remote instructions are in [docs/mcp-and-ssh.md](docs/mcp-and-ssh.md).
 

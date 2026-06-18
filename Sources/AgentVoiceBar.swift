@@ -365,6 +365,30 @@ final class VoiceStore {
         try? FileManager.default.removeItem(at: nativePendingURL.appendingPathComponent("\(question.id).json"))
     }
 
+    func appendNativeReply(question: NativeQuestion, answer: String) {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let title = question.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let item = VoiceItem(
+            id: UUID().uuidString,
+            created_at: now,
+            ready_at: now,
+            source: "You",
+            title: "Reply: \((title?.isEmpty == false ? title! : "Question"))",
+            priority: "normal",
+            mode: "silent",
+            status: "ready",
+            voice: readConfig().voice,
+            speed: nil,
+            temperature: nil,
+            top_p: nil,
+            text: "Question: \(question.question)\n\nAnswer: \(answer)",
+            speech_text: nil,
+            file: nil,
+            error: nil
+        )
+        appendManualItem(item)
+    }
+
     func recentItems(limit: Int = 300) -> [VoiceItem] {
         guard let content = try? String(contentsOf: queueURL, encoding: .utf8) else { return [] }
         var order: [String] = []
@@ -738,12 +762,14 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
     var onSkip: (() -> Void)?
     var onArchiveItem: ((String?) -> Void)?
     var onClearInbox: (() -> Void)?
+    var onNativeReply: ((VoiceItem) -> Void)?
 
     private var playingFile: String?
     private var selectedItemKey: String?
     private let listScrollView = NSScrollView()
     private let listDocument = InboxDocumentView()
     private let searchField = NSSearchField()
+    private let kindControl = NSSegmentedControl(labels: ["All", "Questions", "Ready", "Active"], trackingMode: .selectOne, target: nil, action: nil)
     private let sourcePopup = NSPopUpButton()
     private let sourceRuleControl = NSSegmentedControl(labels: ["Follow", "Speak", "Notify", "DND"], trackingMode: .selectOne, target: nil, action: nil)
     private let resultCountLabel = NSTextField(labelWithString: "0 messages")
@@ -753,6 +779,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
     private let detailPlayback = NSTextField(labelWithString: "Playback details appear here.")
     private let detailText = NSTextView()
     private let replayButton = NSButton(title: "Replay", target: nil, action: nil)
+    private let replyButton = NSButton(title: "Reply", target: nil, action: nil)
     private let skipButton = NSButton(title: "Skip", target: nil, action: nil)
     private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
     private let archiveButton = NSButton(title: "Archive", target: nil, action: nil)
@@ -814,12 +841,14 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         titleStack.addArrangedSubview(playbackStatusLabel)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        for button in [replayButton, skipButton, stopButton, archiveButton, clearButton, refreshButton] {
+        for button in [replayButton, replyButton, skipButton, stopButton, archiveButton, clearButton, refreshButton] {
             button.bezelStyle = .rounded
             button.controlSize = .small
         }
         replayButton.target = self
         replayButton.action = #selector(replayTapped)
+        replyButton.target = self
+        replyButton.action = #selector(replyTapped)
         skipButton.target = self
         skipButton.action = #selector(skipTapped)
         stopButton.target = self
@@ -846,6 +875,11 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         searchField.target = self
         searchField.action = #selector(searchChanged)
         searchField.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        kindControl.controlSize = .small
+        kindControl.selectedSegment = 0
+        kindControl.target = self
+        kindControl.action = #selector(filterChanged)
+        kindControl.widthAnchor.constraint(equalToConstant: 280).isActive = true
         sourcePopup.target = self
         sourcePopup.action = #selector(sourceChanged)
         sourcePopup.widthAnchor.constraint(equalToConstant: 170).isActive = true
@@ -861,6 +895,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         let filterSpacer = NSView()
         filterSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         filterRow.addArrangedSubview(searchField)
+        filterRow.addArrangedSubview(kindControl)
         filterRow.addArrangedSubview(sourcePopup)
         filterRow.addArrangedSubview(ruleLabel)
         filterRow.addArrangedSubview(sourceRuleControl)
@@ -924,6 +959,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         detailSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         detailHeader.addArrangedSubview(detailTitleStack)
         detailHeader.addArrangedSubview(detailSpacer)
+        detailHeader.addArrangedSubview(replyButton)
         detailHeader.addArrangedSubview(replayButton)
         detailHeader.addArrangedSubview(archiveButton)
         detailStack.addArrangedSubview(detailHeader)
@@ -1044,6 +1080,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
             detailPlayback.toolTip = nil
             detailText.string = "Choose a message from the inbox to read the full text, inspect playback history, or replay the local audio."
             replayButton.isEnabled = false
+            replyButton.isEnabled = false
             archiveButton.isEnabled = false
             return
         }
@@ -1062,6 +1099,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         }
         detailText.string = item.displayBodyText
         replayButton.isEnabled = item.file != nil
+        replyButton.isEnabled = item.mode == "question"
         archiveButton.isEnabled = true
     }
 
@@ -1075,6 +1113,12 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         guard let item = filteredItems(store.recentItems(limit: 0)).first(where: { $0.stableKey == selectedItemKey }),
               let file = item.file else { return }
         onReplayFile?(file)
+    }
+
+    @objc private func replyTapped() {
+        guard let item = filteredItems(store.recentItems(limit: 0)).first(where: { $0.stableKey == selectedItemKey }),
+              item.mode == "question" else { return }
+        onNativeReply?(item)
     }
 
     private func updateSourcePopup() {
@@ -1097,6 +1141,16 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         let source = sourcePopup.selectedItem?.title ?? "All Sources"
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return items.filter { item in
+            switch kindControl.selectedSegment {
+            case 1:
+                if item.mode != "question" { return false }
+            case 2:
+                if item.status != "ready" { return false }
+            case 3:
+                guard let status = item.status, status != "ready" else { return false }
+            default:
+                break
+            }
             if source != "All Sources" && sourceName(item) != source {
                 return false
             }
@@ -1142,6 +1196,9 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         if (sourcePopup.selectedItem?.title ?? "All Sources") != "All Sources" {
             return "tray"
         }
+        if kindControl.selectedSegment == 1 {
+            return "questionmark.bubble"
+        }
         return "waveform.and.bubble.left"
     }
 
@@ -1152,6 +1209,9 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         if (sourcePopup.selectedItem?.title ?? "All Sources") != "All Sources" {
             return "No Messages From This Source"
         }
+        if kindControl.selectedSegment == 1 {
+            return "No Questions Yet"
+        }
         return "Inbox Is Ready"
     }
 
@@ -1161,6 +1221,9 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         }
         if (sourcePopup.selectedItem?.title ?? "All Sources") != "All Sources" {
             return "When this source sends an agent update, it will appear here."
+        }
+        if kindControl.selectedSegment == 1 {
+            return "Questions from MCP tools will show here, ready for an STT reply."
         }
         return "Incoming MCP speech requests will appear here with replay, archive, and local readout history."
     }
@@ -1189,6 +1252,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         }
     }
 
+    @objc private func filterChanged() { reload() }
     @objc private func searchChanged() { reload() }
     @objc private func sourceChanged() {
         updateSourceRuleControl()
@@ -1231,6 +1295,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     var onQuit: (() -> Void)?
     var onConfigChanged: (() -> Void)?
     var onReplayRateChanged: ((Float) -> Void)?
+    var onNativeReply: ((VoiceItem) -> Void)?
     private var playingFile: String?
     private var expandedItemID: String?
     private var tuningVisible = false
@@ -1238,7 +1303,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     private var messageDetailPanel: NSView?
 
     private let modeControl = NSSegmentedControl(labels: ["Speak", "Notify", "DND"], trackingMode: .selectOne, target: nil, action: nil)
-    private let filterControl = NSSegmentedControl(labels: ["All", "Ready", "Active"], trackingMode: .selectOne, target: nil, action: nil)
+    private let filterControl = NSSegmentedControl(labels: ["All", "Questions", "Ready", "Active"], trackingMode: .selectOne, target: nil, action: nil)
     private let voiceField = NSTextField(string: "Chelsie")
     private let speedSlider = NSSlider(value: 1.35, minValue: 1.00, maxValue: 1.65, target: nil, action: nil)
     private let speedValueLabel = NSTextField(labelWithString: "1.35x")
@@ -1265,6 +1330,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     private let inboxScrollView = NSScrollView()
     private let inboxDocument = InboxDocumentView()
     private let replayButton = NSButton(title: "Replay Last", target: nil, action: nil)
+    private let replyButton = NSButton(title: "Reply", target: nil, action: nil)
     private let skipButton = NSButton(title: "Skip", target: nil, action: nil)
     private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
     private let speakTestButton = NSButton(title: "Speak Test", target: nil, action: nil)
@@ -1443,6 +1509,9 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         replayButton.title = "Replay"
         replayButton.target = self
         replayButton.action = #selector(replayTapped)
+        replyButton.bezelStyle = .rounded
+        replyButton.target = self
+        replyButton.action = #selector(replyTapped)
         skipButton.bezelStyle = .rounded
         skipButton.target = self
         skipButton.action = #selector(skipTapped)
@@ -1459,6 +1528,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         actionSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         inboxActions.addArrangedSubview(filterControl)
         inboxActions.addArrangedSubview(actionSpacer)
+        inboxActions.addArrangedSubview(replyButton)
         inboxActions.addArrangedSubview(replayButton)
         inboxActions.addArrangedSubview(stopButton)
         inboxActions.addArrangedSubview(archiveButton)
@@ -1835,6 +1905,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
             selectedTextView.string = ""
             messageDetailPanel?.isHidden = false
             replayButton.isEnabled = false
+            replyButton.isEnabled = false
             archiveButton.isEnabled = false
             return
         }
@@ -1849,6 +1920,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         ].compactMap { $0 }.joined(separator: "  •  ")
         selectedTextView.string = item.displayBodyText
         replayButton.isEnabled = item.file != nil
+        replyButton.isEnabled = item.mode == "question"
         archiveButton.isEnabled = true
     }
 
@@ -1900,8 +1972,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         return items.filter { item in
             switch filterControl.selectedSegment {
             case 1:
-                if item.status != "ready" { return false }
+                if item.mode != "question" { return false }
             case 2:
+                if item.status != "ready" { return false }
+            case 3:
                 guard let status = item.status, status != "ready" else { return false }
             default:
                 break
@@ -1933,8 +2007,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         }
         switch filterControl.selectedSegment {
         case 1:
-            return "No ready messages in this filter yet."
+            return "No questions yet. Agent questions will appear here with a reply action."
         case 2:
+            return "No ready messages in this filter yet."
+        case 3:
             return "No active renders or failures right now."
         default:
             return "No messages yet. Notify and DND modes still save incoming agent speech here."
@@ -2141,6 +2217,13 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         }
         onReplayLast?()
     }
+    @objc private func replyTapped() {
+        guard let item = currentSelectedItem(), item.mode == "question" else { return }
+        expandedItemID = item.stableKey
+        rebuildInbox()
+        updateSelectedDetail()
+        onNativeReply?(item)
+    }
     @objc private func skipTapped() { onSkip?() }
     @objc private func stopTapped() { onStop?() }
     @objc private func speakTestTapped() { onSpeakTest?() }
@@ -2159,6 +2242,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
 final class NativeQuestionPromptController: NSViewController {
     private let store: VoiceStore
     private let question: NativeQuestion
+    private let finishQuestion: (NativeQuestion, String, String, String?) -> Void
     private let onFinish: () -> Void
     private let transcriptView = NSTextView()
     private let statusLabel = NSTextField(labelWithString: "Ready")
@@ -2172,9 +2256,15 @@ final class NativeQuestionPromptController: NSViewController {
     private var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en_US"))
     private var isRecording = false
 
-    init(store: VoiceStore, question: NativeQuestion, onFinish: @escaping () -> Void) {
+    init(
+        store: VoiceStore,
+        question: NativeQuestion,
+        finishQuestion: @escaping (NativeQuestion, String, String, String?) -> Void,
+        onFinish: @escaping () -> Void
+    ) {
         self.store = store
         self.question = question
+        self.finishQuestion = finishQuestion
         self.onFinish = onFinish
         super.init(nibName: nil, bundle: nil)
     }
@@ -2280,13 +2370,13 @@ final class NativeQuestionPromptController: NSViewController {
             statusLabel.textColor = Theme.amber
             return
         }
-        store.finishNativeQuestion(question, answer: answer, status: "answered")
+        finishQuestion(question, answer, "answered", nil)
         onFinish()
     }
 
     @objc private func cancelTapped() {
         stopRecording(status: "Cancelled")
-        store.finishNativeQuestion(question, answer: "", status: "cancelled")
+        finishQuestion(question, "", "cancelled", nil)
         onFinish()
     }
 
@@ -2472,6 +2562,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         popoverController.onQuit = { NSApp.terminate(nil) }
         popoverController.onConfigChanged = { [weak self] in self?.updateIcon() }
         popoverController.onReplayRateChanged = { [weak self] rate in self?.setReplayRate(rate) }
+        popoverController.onNativeReply = { [weak self] item in self?.showNativeReply(for: item) }
         panel = PopoverPanel(
             contentRect: NSRect(x: 0, y: 0, width: 780, height: 680),
             styleMask: [.borderless],
@@ -2563,7 +2654,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
     private func showNativeQuestion(_ question: NativeQuestion) {
         activeNativeQuestionID = question.id
-        let controller = NativeQuestionPromptController(store: store, question: question) { [weak self] in
+        let controller = NativeQuestionPromptController(
+            store: store,
+            question: question,
+            finishQuestion: { [weak self] question, answer, status, error in
+                self?.store.finishNativeQuestion(question, answer: answer, status: status, error: error)
+            }
+        ) { [weak self] in
             guard let self else { return }
             self.nativePromptWindow?.orderOut(nil)
             self.nativePromptWindow = nil
@@ -2595,6 +2692,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private func showNativeReply(for item: VoiceItem) {
+        let question = nativeQuestion(from: item)
+        activeNativeQuestionID = nil
+        let controller = NativeQuestionPromptController(
+            store: store,
+            question: question,
+            finishQuestion: { [weak self] question, answer, status, _ in
+                guard status == "answered", !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                self?.store.appendNativeReply(question: question, answer: answer)
+            }
+        ) { [weak self] in
+            guard let self else { return }
+            self.nativePromptWindow?.orderOut(nil)
+            self.nativePromptWindow = nil
+            self.nativePromptController = nil
+            self.lastStorageSignature = nil
+            self.popoverController.reload()
+            self.dashboardController?.reload()
+            if self.dashboardWindow?.isVisible != true, self.panel.isVisible != true {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
+        let window = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Agent Voice Bar Reply"
+        window.backgroundColor = Theme.background
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.collectionBehavior = [.transient, .fullScreenAuxiliary]
+        window.contentViewController = controller
+        nativePromptWindow?.orderOut(nil)
+        nativePromptController = controller
+        nativePromptWindow = window
+        NSApp.setActivationPolicy(.regular)
+        window.center()
+        window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func nativeQuestion(from item: VoiceItem) -> NativeQuestion {
+        NativeQuestion(
+            id: "manual-\(item.stableKey)",
+            created_at: item.created_at,
+            question: questionText(from: item),
+            title: item.displayTitle,
+            source: item.source,
+            priority: item.priority,
+            timeout_seconds: nil
+        )
+    }
+
+    private func questionText(from item: VoiceItem) -> String {
+        var text = item.displayBodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.lowercased().hasPrefix("question:") {
+            text = String(text.dropFirst("Question:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let answerRange = text.range(of: "\nAnswer:", options: [.caseInsensitive]) {
+            text = String(text[..<answerRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text.isEmpty ? item.displayTitle : text
     }
 
     private func handle(command: VoiceCommand) {
@@ -2683,6 +2847,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             controller.onSkip = { [weak self] in self?.skipPlayback() }
             controller.onArchiveItem = { [weak self] key in self?.archiveItem(key) }
             controller.onClearInbox = { [weak self] in self?.clearInbox() }
+            controller.onNativeReply = { [weak self] item in self?.showNativeReply(for: item) }
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 980, height: 680),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
