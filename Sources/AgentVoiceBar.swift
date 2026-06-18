@@ -26,6 +26,7 @@ struct VoiceConfig: Codable {
     var top_p: String = "0.85"
     var voice: String = "Chelsie"
     var max_chars: Int = 1200
+    var question_voice: String = "spokenly"
 
     init() {}
 
@@ -37,6 +38,7 @@ struct VoiceConfig: Codable {
         case top_p
         case voice
         case max_chars
+        case question_voice
     }
 
     init(from decoder: Decoder) throws {
@@ -48,6 +50,10 @@ struct VoiceConfig: Codable {
         top_p = try values.decodeIfPresent(String.self, forKey: .top_p) ?? "0.85"
         voice = try values.decodeIfPresent(String.self, forKey: .voice) ?? "Chelsie"
         max_chars = try values.decodeIfPresent(Int.self, forKey: .max_chars) ?? 1200
+        question_voice = try values.decodeIfPresent(String.self, forKey: .question_voice) ?? "spokenly"
+        if !["spokenly", "agent_voice_bar", "silent"].contains(question_voice) {
+            question_voice = "spokenly"
+        }
     }
 }
 
@@ -637,6 +643,7 @@ final class BubbleRow: NSView {
         case "autoplay": return "Speak"
         case "notify": return "Notify"
         case "silent": return "DND"
+        case "question": return "Question"
         default: return "Message"
         }
     }
@@ -1046,6 +1053,7 @@ final class DashboardViewController: NSViewController, NSTextFieldDelegate, NSSe
         case "autoplay": return "Speak"
         case "notify": return "Notify"
         case "silent": return "DND"
+        case "question": return "Question"
         default: return "Message"
         }
     }
@@ -1861,6 +1869,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
 
     private func displayModeName(_ mode: String) -> String {
         switch mode {
+        case "question": return "Question"
         case "notify": return "Notify"
         case "silent": return "DND"
         default: return "Speak"
@@ -2766,6 +2775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
     private func displayModeName(_ mode: String) -> String {
         switch mode {
+        case "question": return "Question"
         case "notify": return "Notify"
         case "silent": return "DND"
         default: return "Speak"

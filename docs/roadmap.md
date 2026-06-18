@@ -1,8 +1,9 @@
 # Roadmap
 
-Agent Voice Bar is beta software. The product direction is an agent inbox first:
-agents send messages through MCP, the Mac app stores the history, and local TTS
-is an optional layer on top.
+Agent Voice Bar is beta software. The product direction is an agent sidecar
+first: agents send messages and questions through MCP, the Mac app stores the
+history, local TTS handles inbox readouts, and Spokenly can own the interactive
+prompt/recording surface.
 
 Planned directions:
 
@@ -12,7 +13,9 @@ Near-term:
 - App-owned playback, notifications, unread state, and stable inbox reloads.
 - Agent Voice Bar as the single MCP interface for one-way speech and two-way
   question flows.
-- Coordinated speak-then-dictate flow using Qwen TTS and Spokenly dictation.
+- Sidecar mode for Spokenly so interactive questions do not double-speak.
+- Optional coordinated Qwen-then-Spokenly flow for users who prefer local
+  question TTS.
 - Message metadata: title, source agent, priority, status, and generated audio.
 - Read/unread, pin, delete, and filters for the menu-bar inbox.
 - Full message detail with original prompt, speech-normalized text, render errors,

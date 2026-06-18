@@ -38,6 +38,7 @@ DEFAULT_CONFIG = {
     "temperature": TEMPERATURE,
     "top_p": TOP_P,
     "max_chars": 1200,
+    "question_voice": "spokenly",
     "ask_wait_for_speech_seconds": 180,
     "ask_dictation_timeout_seconds": 900,
     "spokenly_bridge": str(Path.home() / "Library" / "Application Support" / "Spokenly" / "mcp-bridge.sh"),
@@ -112,6 +113,8 @@ def load_config():
     config = read_json(CONFIG_FILE, DEFAULT_CONFIG)
     if config.get("mode") not in {"autoplay", "notify", "silent"}:
         config["mode"] = "autoplay"
+    if config.get("question_voice") not in {"spokenly", "agent_voice_bar", "silent"}:
+        config["question_voice"] = "spokenly"
     return config
 
 
@@ -257,7 +260,7 @@ def tools_list(req_id):
                 },
                 {
                     "name": "ask_user_voice",
-                    "description": "Ask the user one question through Agent Voice Bar: speak the exact question first, then capture the answer with the configured dictation backend. Do not use for passwords, secrets, or sensitive information.",
+                    "description": "Ask the user one question through Agent Voice Bar. By default this uses Spokenly as the prompt, TTS, and dictation surface so Agent Voice Bar does not speak over it. Set question_voice to agent_voice_bar to use local Qwen speech before dictation. Do not use for passwords, secrets, or sensitive information.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -277,9 +280,14 @@ def tools_list(req_id):
                                 "type": "string",
                                 "description": "Optional priority label: low, normal, high, or urgent.",
                             },
+                            "question_voice": {
+                                "type": "string",
+                                "enum": ["spokenly", "agent_voice_bar", "silent"],
+                                "description": "Who should speak the question. spokenly is the default sidecar mode; agent_voice_bar uses local Qwen first; silent skips Agent Voice Bar TTS.",
+                            },
                             "wait_for_speech": {
                                 "type": "boolean",
-                                "description": "Whether to wait for local speech playback to finish before recording. Defaults to true.",
+                                "description": "For question_voice=agent_voice_bar, whether to wait for local speech playback to finish before recording. Defaults to true.",
                             },
                         },
                         "required": ["question"],
@@ -287,7 +295,7 @@ def tools_list(req_id):
                 },
                 {
                     "name": "ask_user_voice_batch",
-                    "description": "Ask the user multiple questions one by one. Each question is spoken, then captured with dictation, and all answers are returned as structured content. Do not use for passwords, secrets, or sensitive information.",
+                    "description": "Ask the user multiple questions one by one through Agent Voice Bar. By default this uses Spokenly as the prompt, TTS, and dictation surface so Agent Voice Bar does not speak over it. Set question_voice to agent_voice_bar to use local Qwen speech before each dictation step. Do not use for passwords, secrets, or sensitive information.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -308,9 +316,14 @@ def tools_list(req_id):
                                 "type": "string",
                                 "description": "Optional priority label: low, normal, high, or urgent.",
                             },
+                            "question_voice": {
+                                "type": "string",
+                                "enum": ["spokenly", "agent_voice_bar", "silent"],
+                                "description": "Who should speak the questions. spokenly is the default sidecar mode; agent_voice_bar uses local Qwen first; silent skips Agent Voice Bar TTS.",
+                            },
                             "wait_for_speech": {
                                 "type": "boolean",
-                                "description": "Whether to wait for each local speech playback to finish before recording. Defaults to true.",
+                                "description": "For question_voice=agent_voice_bar, whether to wait for each local speech playback to finish before recording. Defaults to true.",
                             },
                         },
                         "required": ["questions"],
@@ -594,6 +607,35 @@ def extract_dictation_text(result):
     return ""
 
 
+def question_voice_mode(metadata, config):
+    requested = str(metadata.get("question_voice") or config.get("question_voice") or "spokenly")
+    if requested not in {"spokenly", "agent_voice_bar", "silent"}:
+        return "spokenly"
+    return requested
+
+
+def append_question_item(question, metadata, question_voice):
+    item = {
+        "id": str(uuid.uuid4()),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ready_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "source": clean_label(metadata.get("source"), "mcp", 40),
+        "title": clean_label(metadata.get("title"), "Question for you", 120),
+        "priority": clean_label(metadata.get("priority"), "high", 20).lower(),
+        "mode": "question",
+        "status": "ready",
+        "voice": question_voice,
+        "speed": "",
+        "temperature": "",
+        "top_p": "",
+        "text": f"Question: {question}",
+        "speech_text": "",
+        "file": None,
+    }
+    publish_state(item)
+    return item
+
+
 def append_answer_item(question, answer, metadata):
     answer = " ".join((answer or "").split())
     item = {
@@ -625,18 +667,28 @@ def ask_one_question(question, metadata):
     wait_for_speech = True if wait_for_speech is None else bool(wait_for_speech)
     wait_seconds = int(config.get("ask_wait_for_speech_seconds") or DEFAULT_CONFIG["ask_wait_for_speech_seconds"])
     dictation_timeout = int(config.get("ask_dictation_timeout_seconds") or DEFAULT_CONFIG["ask_dictation_timeout_seconds"])
+    question_voice = question_voice_mode(metadata, config)
 
-    ask_metadata = {
-        **metadata,
-        "mode": "autoplay",
-        "title": clean_label(metadata.get("title"), "Question for you", 120),
-        "priority": clean_label(metadata.get("priority"), "high", 20),
+    question_item = append_question_item(question, metadata, question_voice)
+    speech_result = {
+        "accepted": False,
+        "mode": "question",
+        "status": "delegated" if question_voice == "spokenly" else "silent",
+        "voice": question_voice,
+        "file": None,
     }
-    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    speech_result = synthesize_and_play(question, ask_metadata)
     playback_result = {"waited": False, "event": None}
-    if wait_for_speech:
-        playback_result = wait_for_playback(speech_result.get("file"), started_at, wait_seconds)
+    if question_voice == "agent_voice_bar":
+        ask_metadata = {
+            **metadata,
+            "mode": "autoplay",
+            "title": clean_label(metadata.get("title"), "Question for you", 120),
+            "priority": clean_label(metadata.get("priority"), "high", 20),
+        }
+        started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        speech_result = synthesize_and_play(question, ask_metadata)
+        if wait_for_speech:
+            playback_result = wait_for_playback(speech_result.get("file"), started_at, wait_seconds)
 
     dictation_result = call_spokenly_dictation([question], dictation_timeout)
     answer = extract_dictation_text(dictation_result)
@@ -644,6 +696,8 @@ def ask_one_question(question, metadata):
     return {
         "question": question,
         "answer": answer,
+        "question_item_id": question_item.get("id"),
+        "question_voice": question_voice,
         "speech": speech_result,
         "playback": playback_result,
         "dictation": dictation_result,
@@ -664,6 +718,7 @@ def ask_batch(questions, metadata):
             "index": index,
             "question": result["question"],
             "answer": result["answer"],
+            "question_voice": result["question_voice"],
             "playback": result["playback"],
         })
     return {"answers": answers}
@@ -702,6 +757,7 @@ def tools_call(req_id, params):
                     "structuredContent": {
                         "question": result["question"],
                         "answer": result["answer"],
+                        "question_voice": result["question_voice"],
                         "playback": result["playback"],
                     },
                 },

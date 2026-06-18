@@ -1,8 +1,8 @@
 # Agent Voice Bar
 
-> Beta local agent inbox for macOS. Agents send structured messages; your Mac
-> stores the history, notifies you, and optionally speaks updates aloud with
-> local TTS.
+> Beta local agent sidecar for macOS. Agents send structured messages; your Mac
+> stores the history, notifies you, speaks updates aloud with local TTS, and can
+> hand interactive questions to Spokenly without voices talking over each other.
 
 ![Agent Voice Bar hero](docs/assets/agent-voice-bar-hero.png)
 
@@ -23,7 +23,7 @@ This is beta software. The core loop works, but the app is still being polished:
 - local Qwen/MLX TTS backend
 - MCP `speak_text` tool with optional title/source/priority metadata
 - MCP `ask_user_voice` and `ask_user_voice_batch` tools for coordinated
-  speak-then-dictate question flows
+  question flows through Spokenly
 - Speak/Notify/DND delivery modes
 - app-owned playback and notifications
 - serial autoplay queue to avoid readouts interrupting each other
@@ -46,9 +46,9 @@ This is beta software. The core loop works, but the app is still being polished:
 Spokenly is great for speech-to-text: you talk, agents receive text.
 
 Agent Voice Bar started as the other direction: agents talk, you receive a local
-inbox. It is now becoming the coordinator for both directions. Agents should talk
-to one MCP server, while Agent Voice Bar decides when to speak, when to notify,
-and when to hand off to a dictation backend such as Spokenly.
+inbox. It is now becoming a sidecar for both directions. Agents should talk to
+one MCP server, while Agent Voice Bar decides when to speak locally, when to
+notify, and when to hand off an interactive prompt to Spokenly.
 
 Use it for:
 
@@ -57,8 +57,8 @@ Use it for:
 - background coding/research agents
 - "tell me when you need me" workflows
 - local-only TTS without cloud accounts
-- cohesive speak-then-listen question flows using Spokenly or a future local STT
-  backend
+- cohesive question flows using Spokenly's prompt/recording UX, with Qwen kept
+  for local inbox readouts and optional local question voice
 
 ## What It Does
 
@@ -82,8 +82,8 @@ Use it for:
   finished, stopped, or failed.
 - Shows the latest local playback result on replayable messages.
 - Works with remote agents through a reverse SSH tunnel to your Mac.
-- Can ask you questions by speaking the exact prompt first, waiting for playback,
-  then opening Spokenly dictation so speech and recording do not overlap.
+- Can route questions to Spokenly as the default prompt/recording surface so
+  Agent Voice Bar does not also speak over it.
 
 ## Architecture
 
@@ -112,13 +112,12 @@ AI agent
   v
 Agent Voice Bar
   |
-  | speak exact question with local Qwen TTS
+  | log question + call Spokenly ask_user_dictation
   v
-Playback finishes
+Spokenly speaks/prompts + records
   |
-  | call Spokenly ask_user_dictation
   v
-Your spoken answer -> agent response + inbox transcript
+Your spoken answer -> agent response + Agent Voice Bar inbox transcript
 ```
 
 Remote flow:
@@ -242,9 +241,12 @@ Batch question payload:
 }
 ```
 
-`ask_user_voice` speaks the exact question through local Qwen TTS, waits for
-playback to finish, then opens Spokenly dictation. `ask_user_voice_batch` does
-the same thing one question at a time and returns structured answers.
+By default, `ask_user_voice` and `ask_user_voice_batch` use Spokenly as the
+interactive prompt, TTS, and dictation surface. Agent Voice Bar logs the
+question/answer session and returns the transcript, but it does not also speak
+over Spokenly. If you prefer the local Qwen voice for questions, pass
+`"question_voice": "agent_voice_bar"`; Agent Voice Bar will speak first, wait for
+playback, then open Spokenly dictation.
 
 Full local/remote instructions are in [docs/mcp-and-ssh.md](docs/mcp-and-ssh.md).
 
