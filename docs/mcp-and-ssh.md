@@ -12,6 +12,9 @@ Available tools:
   surface, and return the answer.
 - `ask_user_voice_batch`: ask multiple questions one by one and return
   structured answers.
+- `ask_user_native`: experimental Labs path that opens Agent Voice Bar's own
+  native prompt, records with the microphone, transcribes with Apple Speech, and
+  returns the answer without Spokenly.
 
 The backend is still named `qwen_speech` in the examples for compatibility. It
 is the Agent Voice Bar MCP interface.
@@ -86,6 +89,19 @@ printf '%s\n' \
 To use Agent Voice Bar's local Qwen voice before Spokenly dictation, pass
 `"question_voice": "agent_voice_bar"`. The default is `"spokenly"` so the two
 apps do not speak at the same time.
+
+## Native Labs Payload
+
+This bypasses Spokenly and uses Agent Voice Bar's experimental native prompt:
+
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ask_user_native","arguments":{"question":"Can Agent Voice Bar native mode hear you?","title":"Native mode test","source":"Ubuntu"}}}' \
+  | ~/.local/bin/qwen-speech-remote-bridge.sh
+```
+
+Native mode is opt-in while it is being built. Keep using `ask_user_voice` for
+the stable Spokenly sidecar path.
 
 Do not use voice question tools for passwords, API keys, recovery codes, or
 other secrets. MCP clients and servers should keep the user in control of what

@@ -22,6 +22,9 @@ RULES_FILE = APP_DIR / "rules.json"
 STATE_FILE = APP_DIR / "state.json"
 QUEUE_FILE = APP_DIR / "queue.jsonl"
 PLAYBACK_FILE = APP_DIR / "playback.jsonl"
+NATIVE_DIR = APP_DIR / "native"
+NATIVE_PENDING_DIR = NATIVE_DIR / "pending"
+NATIVE_ANSWERS_DIR = NATIVE_DIR / "answers"
 MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
 VOICE = "Chelsie"
 LANG = "English"
@@ -39,6 +42,8 @@ DEFAULT_CONFIG = {
     "top_p": TOP_P,
     "max_chars": 1200,
     "question_voice": "spokenly",
+    "dictation_backend": "spokenly",
+    "native_question_timeout_seconds": 900,
     "ask_wait_for_speech_seconds": 180,
     "ask_dictation_timeout_seconds": 900,
     "spokenly_bridge": str(Path.home() / "Library" / "Application Support" / "Spokenly" / "mcp-bridge.sh"),
@@ -115,6 +120,8 @@ def load_config():
         config["mode"] = "autoplay"
     if config.get("question_voice") not in {"spokenly", "agent_voice_bar", "silent"}:
         config["question_voice"] = "spokenly"
+    if config.get("dictation_backend") not in {"spokenly", "native"}:
+        config["dictation_backend"] = "spokenly"
     return config
 
 
@@ -285,6 +292,11 @@ def tools_list(req_id):
                                 "enum": ["spokenly", "agent_voice_bar", "silent"],
                                 "description": "Who should speak the question. spokenly is the default sidecar mode; agent_voice_bar uses local Qwen first; silent skips Agent Voice Bar TTS.",
                             },
+                            "dictation_backend": {
+                                "type": "string",
+                                "enum": ["spokenly", "native"],
+                                "description": "Who should record/transcribe the answer. spokenly is the stable default; native uses Agent Voice Bar Labs.",
+                            },
                             "wait_for_speech": {
                                 "type": "boolean",
                                 "description": "For question_voice=agent_voice_bar, whether to wait for local speech playback to finish before recording. Defaults to true.",
@@ -321,12 +333,48 @@ def tools_list(req_id):
                                 "enum": ["spokenly", "agent_voice_bar", "silent"],
                                 "description": "Who should speak the questions. spokenly is the default sidecar mode; agent_voice_bar uses local Qwen first; silent skips Agent Voice Bar TTS.",
                             },
+                            "dictation_backend": {
+                                "type": "string",
+                                "enum": ["spokenly", "native"],
+                                "description": "Who should record/transcribe each answer. spokenly is the stable default; native uses Agent Voice Bar Labs.",
+                            },
                             "wait_for_speech": {
                                 "type": "boolean",
                                 "description": "For question_voice=agent_voice_bar, whether to wait for each local speech playback to finish before recording. Defaults to true.",
                             },
                         },
                         "required": ["questions"],
+                    },
+                },
+                {
+                    "name": "ask_user_native",
+                    "description": "Experimental Labs tool: ask the user one question with Agent Voice Bar's native prompt and Apple Speech transcription. Spokenly remains the stable default for ask_user_voice.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "Question to show in the native Agent Voice Bar prompt.",
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Optional short title for the prompt/session.",
+                            },
+                            "source": {
+                                "type": "string",
+                                "description": "Optional agent/source name, such as Codex, Claude, or Ubuntu.",
+                            },
+                            "priority": {
+                                "type": "string",
+                                "description": "Optional priority label: low, normal, high, or urgent.",
+                            },
+                            "question_voice": {
+                                "type": "string",
+                                "enum": ["agent_voice_bar", "silent"],
+                                "description": "Whether Agent Voice Bar should speak the question locally before recording. Defaults to agent_voice_bar for this Labs tool.",
+                            },
+                        },
+                        "required": ["question"],
                     },
                 },
             ]
@@ -607,8 +655,17 @@ def extract_dictation_text(result):
     return ""
 
 
-def question_voice_mode(metadata, config):
+def dictation_backend_mode(metadata, config):
+    requested = str(metadata.get("dictation_backend") or config.get("dictation_backend") or "spokenly")
+    if requested not in {"spokenly", "native"}:
+        return "spokenly"
+    return requested
+
+
+def question_voice_mode(metadata, config, dictation_backend):
     requested = str(metadata.get("question_voice") or config.get("question_voice") or "spokenly")
+    if dictation_backend == "native" and "question_voice" not in metadata and requested == "spokenly":
+        return "agent_voice_bar"
     if requested not in {"spokenly", "agent_voice_bar", "silent"}:
         return "spokenly"
     return requested
@@ -658,6 +715,59 @@ def append_answer_item(question, answer, metadata):
     publish_state(item)
 
 
+def wait_for_native_dictation(question, metadata, timeout_seconds):
+    question_id = str(uuid.uuid4())
+    NATIVE_PENDING_DIR.mkdir(parents=True, exist_ok=True)
+    NATIVE_ANSWERS_DIR.mkdir(parents=True, exist_ok=True)
+    pending_path = NATIVE_PENDING_DIR / f"{question_id}.json"
+    answer_path = NATIVE_ANSWERS_DIR / f"{question_id}.json"
+    payload = {
+        "id": question_id,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "question": question,
+        "title": clean_label(metadata.get("title"), "Native question", 120),
+        "source": clean_label(metadata.get("source"), "mcp", 40),
+        "priority": clean_label(metadata.get("priority"), "high", 20).lower(),
+        "timeout_seconds": timeout_seconds,
+    }
+    write_json(pending_path, payload)
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        while time.monotonic() < deadline:
+            if answer_path.exists():
+                answer = read_json(answer_path, {})
+                status = str(answer.get("status") or "answered")
+                if status == "cancelled":
+                    return {
+                        "content": [{"type": "text", "text": ""}],
+                        "structuredContent": {
+                            "answer": "",
+                            "status": "cancelled",
+                            "native_question_id": question_id,
+                            "backend": "native",
+                        },
+                    }
+                if status == "failed":
+                    raise RuntimeError(str(answer.get("error") or "Native dictation failed"))
+                text = str(answer.get("answer") or "")
+                return {
+                    "content": [{"type": "text", "text": text}],
+                    "structuredContent": {
+                        "answer": text,
+                        "status": status,
+                        "native_question_id": question_id,
+                        "backend": "native",
+                    },
+                }
+            time.sleep(0.5)
+        raise TimeoutError(f"Native dictation timed out after {timeout_seconds} seconds")
+    finally:
+        try:
+            pending_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def ask_one_question(question, metadata):
     question = " ".join((question or "").split())
     if not question:
@@ -667,7 +777,9 @@ def ask_one_question(question, metadata):
     wait_for_speech = True if wait_for_speech is None else bool(wait_for_speech)
     wait_seconds = int(config.get("ask_wait_for_speech_seconds") or DEFAULT_CONFIG["ask_wait_for_speech_seconds"])
     dictation_timeout = int(config.get("ask_dictation_timeout_seconds") or DEFAULT_CONFIG["ask_dictation_timeout_seconds"])
-    question_voice = question_voice_mode(metadata, config)
+    native_timeout = int(config.get("native_question_timeout_seconds") or DEFAULT_CONFIG["native_question_timeout_seconds"])
+    dictation_backend = dictation_backend_mode(metadata, config)
+    question_voice = question_voice_mode(metadata, config, dictation_backend)
 
     question_item = append_question_item(question, metadata, question_voice)
     speech_result = {
@@ -690,7 +802,10 @@ def ask_one_question(question, metadata):
         if wait_for_speech:
             playback_result = wait_for_playback(speech_result.get("file"), started_at, wait_seconds)
 
-    dictation_result = call_spokenly_dictation([question], dictation_timeout)
+    if dictation_backend == "native":
+        dictation_result = wait_for_native_dictation(question, metadata, native_timeout)
+    else:
+        dictation_result = call_spokenly_dictation([question], dictation_timeout)
     answer = extract_dictation_text(dictation_result)
     append_answer_item(question, answer, {**metadata, "source": "User", "title": f"Answer: {clean_label(metadata.get('title'), 'Question', 80)}"})
     return {
@@ -698,6 +813,7 @@ def ask_one_question(question, metadata):
         "answer": answer,
         "question_item_id": question_item.get("id"),
         "question_voice": question_voice,
+        "dictation_backend": dictation_backend,
         "speech": speech_result,
         "playback": playback_result,
         "dictation": dictation_result,
@@ -719,6 +835,7 @@ def ask_batch(questions, metadata):
             "question": result["question"],
             "answer": result["answer"],
             "question_voice": result["question_voice"],
+            "dictation_backend": result["dictation_backend"],
             "playback": result["playback"],
         })
     return {"answers": answers}
@@ -758,6 +875,7 @@ def tools_call(req_id, params):
                         "question": result["question"],
                         "answer": result["answer"],
                         "question_voice": result["question_voice"],
+                        "dictation_backend": result["dictation_backend"],
                         "playback": result["playback"],
                     },
                 },
@@ -774,6 +892,29 @@ def tools_call(req_id, params):
                         }
                     ],
                     "structuredContent": result,
+                },
+            )
+        if name == "ask_user_native":
+            native_args = {**args, "dictation_backend": "native"}
+            if "question_voice" not in native_args:
+                native_args["question_voice"] = "agent_voice_bar"
+            result = ask_one_question(native_args.get("question", ""), native_args)
+            return response(
+                req_id,
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": result["answer"],
+                        }
+                    ],
+                    "structuredContent": {
+                        "question": result["question"],
+                        "answer": result["answer"],
+                        "question_voice": result["question_voice"],
+                        "dictation_backend": result["dictation_backend"],
+                        "playback": result["playback"],
+                    },
                 },
             )
         return response(req_id, error={"code": -32601, "message": f"Unknown tool: {name}"})

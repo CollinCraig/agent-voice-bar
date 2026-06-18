@@ -21,6 +21,10 @@
   <string>AppIcon</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Agent Voice Bar Native Mode records your answer to agent questions.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Agent Voice Bar Native Mode transcribes your spoken answers to agent questions.</string>
     <key>NSUserNotificationAlertStyle</key>
     <string>alert</string>
     <key>NSHumanReadableCopyright</key>

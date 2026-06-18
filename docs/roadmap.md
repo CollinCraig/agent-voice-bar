@@ -16,6 +16,8 @@ Near-term:
 - Sidecar mode for Spokenly so interactive questions do not double-speak.
 - Optional coordinated Qwen-then-Spokenly flow for users who prefer local
   question TTS.
+- Agent Voice Bar Labs native prompt with microphone recording and Apple Speech
+  transcription.
 - Message metadata: title, source agent, priority, status, and generated audio.
 - Read/unread, pin, delete, and filters for the menu-bar inbox.
 - Full message detail with original prompt, speech-normalized text, render errors,
@@ -30,6 +32,6 @@ Next:
 - Better remote setup helpers for reverse SSH tunnels and LaunchAgents.
 - Local model picker with install/status checks for Qwen, Kokoro, Chatterbox, and
   other on-device TTS engines.
-- Optional local STT pairing so Spokenly can remain the premium/default backend
-  but is not required.
+- Native mode polish: better overlay design, redo/cancel flows, silence
+  detection, streaming status, local model STT options, and cloud fallback.
 - Signed/notarized beta builds.

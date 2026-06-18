@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import CoreServices
 import Foundation
+import Speech
 import UserNotifications
 
 enum Theme {
@@ -27,6 +28,7 @@ struct VoiceConfig: Codable {
     var voice: String = "Chelsie"
     var max_chars: Int = 1200
     var question_voice: String = "spokenly"
+    var dictation_backend: String = "spokenly"
 
     init() {}
 
@@ -39,6 +41,7 @@ struct VoiceConfig: Codable {
         case voice
         case max_chars
         case question_voice
+        case dictation_backend
     }
 
     init(from decoder: Decoder) throws {
@@ -53,6 +56,10 @@ struct VoiceConfig: Codable {
         question_voice = try values.decodeIfPresent(String.self, forKey: .question_voice) ?? "spokenly"
         if !["spokenly", "agent_voice_bar", "silent"].contains(question_voice) {
             question_voice = "spokenly"
+        }
+        dictation_backend = try values.decodeIfPresent(String.self, forKey: .dictation_backend) ?? "spokenly"
+        if !["spokenly", "native"].contains(dictation_backend) {
+            dictation_backend = "spokenly"
         }
     }
 }
@@ -205,6 +212,25 @@ struct VoiceCommand: Codable {
     var text: String?
 }
 
+struct NativeQuestion: Codable {
+    var id: String
+    var created_at: String?
+    var question: String
+    var title: String?
+    var source: String?
+    var priority: String?
+    var timeout_seconds: Int?
+}
+
+struct NativeAnswer: Codable {
+    var id: String
+    var question: String
+    var answer: String
+    var status: String
+    var created_at: String
+    var error: String?
+}
+
 final class VoiceStore {
     let appDir: URL
     let configURL: URL
@@ -214,6 +240,8 @@ final class VoiceStore {
     let queueURL: URL
     let playbackURL: URL
     let commandURL: URL
+    let nativePendingURL: URL
+    let nativeAnswersURL: URL
 
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -225,6 +253,8 @@ final class VoiceStore {
         queueURL = appDir.appendingPathComponent("queue.jsonl")
         playbackURL = appDir.appendingPathComponent("playback.jsonl")
         commandURL = appDir.appendingPathComponent("command.json")
+        nativePendingURL = appDir.appendingPathComponent("native/pending", isDirectory: true)
+        nativeAnswersURL = appDir.appendingPathComponent("native/answers", isDirectory: true)
     }
 
     func readConfig() -> VoiceConfig {
@@ -286,11 +316,53 @@ final class VoiceStore {
     }
 
     func storageSignature() -> String {
-        let urls = [configURL, rulesURL, stateURL, queueURL, playbackURL, commandURL]
+        let urls = [configURL, rulesURL, stateURL, queueURL, playbackURL, commandURL, nativePendingURL, nativeAnswersURL]
         return urls.map { url in
             let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0
             return "\(url.lastPathComponent):\(modified)"
         }.joined(separator: "|")
+    }
+
+    func pendingNativeQuestion() -> NativeQuestion? {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: nativePendingURL,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+        let sorted = urls
+            .filter { $0.pathExtension == "json" }
+            .sorted {
+                let left = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let right = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return left < right
+            }
+        for url in sorted {
+            if let data = try? Data(contentsOf: url),
+               let question = try? JSONDecoder().decode(NativeQuestion.self, from: data) {
+                return question
+            }
+        }
+        return nil
+    }
+
+    func finishNativeQuestion(_ question: NativeQuestion, answer: String, status: String, error: String? = nil) {
+        try? FileManager.default.createDirectory(at: nativeAnswersURL, withIntermediateDirectories: true)
+        let payload = NativeAnswer(
+            id: question.id,
+            question: question.question,
+            answer: answer,
+            status: status,
+            created_at: ISO8601DateFormatter().string(from: Date()),
+            error: error
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(payload) {
+            try? data.write(to: nativeAnswersURL.appendingPathComponent("\(question.id).json"), options: .atomic)
+        }
+        try? FileManager.default.removeItem(at: nativePendingURL.appendingPathComponent("\(question.id).json"))
     }
 
     func recentItems(limit: Int = 300) -> [VoiceItem] {
@@ -2033,6 +2105,244 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     @objc private func quitTapped() { onQuit?() }
 }
 
+final class NativeQuestionPromptController: NSViewController {
+    private let store: VoiceStore
+    private let question: NativeQuestion
+    private let onFinish: () -> Void
+    private let transcriptView = NSTextView()
+    private let statusLabel = NSTextField(labelWithString: "Ready")
+    private let recordButton = NSButton(title: "Record", target: nil, action: nil)
+    private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
+    private let submitButton = NSButton(title: "Submit", target: nil, action: nil)
+    private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+    private let audioEngine = AVAudioEngine()
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en_US"))
+    private var isRecording = false
+
+    init(store: VoiceStore, question: NativeQuestion, onFinish: @escaping () -> Void) {
+        self.store = store
+        self.question = question
+        self.onFinish = onFinish
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 560, height: 420))
+        view.wantsLayer = true
+        view.layer?.backgroundColor = Theme.background.cgColor
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        buildUI()
+    }
+
+    private func buildUI() {
+        let root = NSStackView()
+        root.orientation = .vertical
+        root.spacing = 14
+        root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            root.topAnchor.constraint(equalTo: view.topAnchor),
+            root.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
+        let eyebrow = NSTextField(labelWithString: "LABS / Native Question")
+        eyebrow.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
+        eyebrow.textColor = Theme.cyan
+        root.addArrangedSubview(eyebrow)
+
+        let title = NSTextField(labelWithString: question.title?.isEmpty == false ? question.title! : "Question for you")
+        title.font = .systemFont(ofSize: 22, weight: .bold)
+        title.textColor = Theme.text
+        root.addArrangedSubview(title)
+
+        let prompt = NSTextField(wrappingLabelWithString: question.question)
+        prompt.font = .systemFont(ofSize: 15, weight: .medium)
+        prompt.textColor = Theme.text
+        prompt.maximumNumberOfLines = 5
+        root.addArrangedSubview(prompt)
+
+        let scrollView = NSScrollView()
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        transcriptView.font = .systemFont(ofSize: 15)
+        transcriptView.textColor = Theme.text
+        transcriptView.backgroundColor = Theme.bubble
+        transcriptView.insertionPointColor = Theme.cyan
+        transcriptView.isRichText = false
+        transcriptView.string = ""
+        scrollView.documentView = transcriptView
+        root.addArrangedSubview(scrollView)
+        scrollView.heightAnchor.constraint(equalToConstant: 150).isActive = true
+
+        statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        statusLabel.textColor = Theme.muted
+        root.addArrangedSubview(statusLabel)
+
+        let controls = NSStackView()
+        controls.orientation = .horizontal
+        controls.spacing = 10
+        controls.distribution = .fillEqually
+        for button in [recordButton, stopButton, submitButton, cancelButton] {
+            button.bezelStyle = .rounded
+            controls.addArrangedSubview(button)
+        }
+        root.addArrangedSubview(controls)
+
+        recordButton.target = self
+        recordButton.action = #selector(recordTapped)
+        stopButton.target = self
+        stopButton.action = #selector(stopTapped)
+        submitButton.target = self
+        submitButton.action = #selector(submitTapped)
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelTapped)
+        stopButton.isEnabled = false
+    }
+
+    @objc private func recordTapped() {
+        requestSpeechPermission()
+    }
+
+    @objc private func stopTapped() {
+        stopRecording(status: "Recording stopped. Review and submit when ready.")
+    }
+
+    @objc private func submitTapped() {
+        stopRecording(status: "Submitting")
+        let answer = transcriptView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty else {
+            statusLabel.stringValue = "Say or type an answer before submitting."
+            statusLabel.textColor = Theme.amber
+            return
+        }
+        store.finishNativeQuestion(question, answer: answer, status: "answered")
+        onFinish()
+    }
+
+    @objc private func cancelTapped() {
+        stopRecording(status: "Cancelled")
+        store.finishNativeQuestion(question, answer: "", status: "cancelled")
+        onFinish()
+    }
+
+    private func requestSpeechPermission() {
+        let status = SFSpeechRecognizer.authorizationStatus()
+        if status == .authorized {
+            requestMicrophonePermission()
+            return
+        }
+        statusLabel.stringValue = "Requesting speech recognition permission..."
+        SFSpeechRecognizer.requestAuthorization { [weak self] status in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if status == .authorized {
+                    self.requestMicrophonePermission()
+                } else {
+                    self.statusLabel.stringValue = "Speech recognition permission is required for native mode."
+                    self.statusLabel.textColor = .systemRed
+                }
+            }
+        }
+    }
+
+    private func requestMicrophonePermission() {
+        AVCaptureDevice.requestAccess(for: .audio) { [weak self] allowed in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if allowed {
+                    self.startRecording()
+                } else {
+                    self.statusLabel.stringValue = "Microphone permission is required for native mode."
+                    self.statusLabel.textColor = .systemRed
+                }
+            }
+        }
+    }
+
+    private func startRecording() {
+        guard !isRecording else { return }
+        guard let recognizer, recognizer.isAvailable else {
+            statusLabel.stringValue = "Apple Speech is not available right now."
+            statusLabel.textColor = .systemRed
+            return
+        }
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+        guard let recognitionRequest else { return }
+        recognitionRequest.shouldReportPartialResults = true
+        if #available(macOS 13.0, *) {
+            recognitionRequest.addsPunctuation = true
+        }
+
+        let inputNode = audioEngine.inputNode
+        inputNode.removeTap(onBus: 0)
+        let format = inputNode.outputFormat(forBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak recognitionRequest] buffer, _ in
+            recognitionRequest?.append(buffer)
+        }
+
+        do {
+            audioEngine.prepare()
+            try audioEngine.start()
+            isRecording = true
+            recordButton.isEnabled = false
+            stopButton.isEnabled = true
+            statusLabel.stringValue = "Recording..."
+            statusLabel.textColor = Theme.green
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            statusLabel.stringValue = "Could not start microphone: \(error.localizedDescription)"
+            statusLabel.textColor = .systemRed
+            return
+        }
+
+        recognitionTask = recognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let result {
+                    self.transcriptView.string = result.bestTranscription.formattedString
+                }
+                if let error {
+                    self.stopRecording(status: "Speech recognition stopped: \(error.localizedDescription)")
+                } else if result?.isFinal == true {
+                    self.stopRecording(status: "Final transcript ready.")
+                }
+            }
+        }
+    }
+
+    private func stopRecording(status: String) {
+        if audioEngine.isRunning {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
+        recognitionRequest?.endAudio()
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        recognitionRequest = nil
+        isRecording = false
+        recordButton.isEnabled = true
+        stopButton.isEnabled = false
+        statusLabel.stringValue = status
+        statusLabel.textColor = Theme.muted
+    }
+}
+
 final class PopoverPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -2045,6 +2355,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     private var popoverController: VoicePopoverController!
     private var dashboardWindow: NSWindow?
     private var dashboardController: DashboardViewController?
+    private var nativePromptWindow: NSPanel?
+    private var nativePromptController: NativeQuestionPromptController?
+    private var activeNativeQuestionID: String?
     private var timer: Timer?
     private var lastSeenStateKey: String?
     private var lastStorageSignature: String?
@@ -2148,6 +2461,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             return
         }
 
+        checkNativeQuestion()
+
         if shouldReload {
             updateIcon()
             popoverController.reload()
@@ -2180,6 +2495,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
                 deliverNotification(for: item)
             }
         }
+    }
+
+    private func checkNativeQuestion() {
+        guard let question = store.pendingNativeQuestion() else {
+            if nativePromptWindow?.isVisible != true {
+                activeNativeQuestionID = nil
+            }
+            return
+        }
+        if activeNativeQuestionID == question.id, nativePromptWindow?.isVisible == true {
+            return
+        }
+        showNativeQuestion(question)
+    }
+
+    private func showNativeQuestion(_ question: NativeQuestion) {
+        activeNativeQuestionID = question.id
+        let controller = NativeQuestionPromptController(store: store, question: question) { [weak self] in
+            guard let self else { return }
+            self.nativePromptWindow?.orderOut(nil)
+            self.nativePromptWindow = nil
+            self.nativePromptController = nil
+            self.activeNativeQuestionID = nil
+            self.lastStorageSignature = nil
+            self.popoverController.reload()
+            self.dashboardController?.reload()
+            if self.dashboardWindow?.isVisible != true, self.panel.isVisible != true {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
+        let window = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Agent Voice Bar Native Question"
+        window.backgroundColor = Theme.background
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.collectionBehavior = [.transient, .fullScreenAuxiliary]
+        window.contentViewController = controller
+        nativePromptController = controller
+        nativePromptWindow = window
+        NSApp.setActivationPolicy(.regular)
+        window.center()
+        window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func handle(command: VoiceCommand) {

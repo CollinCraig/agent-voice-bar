@@ -24,6 +24,8 @@ This is beta software. The core loop works, but the app is still being polished:
 - MCP `speak_text` tool with optional title/source/priority metadata
 - MCP `ask_user_voice` and `ask_user_voice_batch` tools for coordinated
   question flows through Spokenly
+- experimental MCP `ask_user_native` tool for Agent Voice Bar Labs native
+  prompt/record/transcribe flows without Spokenly
 - Speak/Notify/DND delivery modes
 - app-owned playback and notifications
 - serial autoplay queue to avoid readouts interrupting each other
@@ -84,6 +86,8 @@ Use it for:
 - Works with remote agents through a reverse SSH tunnel to your Mac.
 - Can route questions to Spokenly as the default prompt/recording surface so
   Agent Voice Bar does not also speak over it.
+- Can run an experimental native question prompt with Apple Speech
+  transcription when you explicitly choose the Labs backend.
 
 ## Architecture
 
@@ -247,6 +251,21 @@ question/answer session and returns the transcript, but it does not also speak
 over Spokenly. If you prefer the local Qwen voice for questions, pass
 `"question_voice": "agent_voice_bar"`; Agent Voice Bar will speak first, wait for
 playback, then open Spokenly dictation.
+
+Labs native question payload:
+
+```json
+{
+  "question": "Can I continue with the migration?",
+  "title": "Native mode test",
+  "source": "Codex"
+}
+```
+
+Call this through `qwen_speech.ask_user_native`. It opens Agent Voice Bar's own
+native prompt, records with the microphone, transcribes with Apple Speech, and
+returns the answer. This path is experimental and opt-in; Spokenly remains the
+default stable backend.
 
 Full local/remote instructions are in [docs/mcp-and-ssh.md](docs/mcp-and-ssh.md).
 
