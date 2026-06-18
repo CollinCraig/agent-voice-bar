@@ -21,6 +21,7 @@ CONFIG_FILE = APP_DIR / "config.json"
 RULES_FILE = APP_DIR / "rules.json"
 STATE_FILE = APP_DIR / "state.json"
 QUEUE_FILE = APP_DIR / "queue.jsonl"
+PLAYBACK_FILE = APP_DIR / "playback.jsonl"
 MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
 VOICE = "Chelsie"
 LANG = "English"
@@ -37,6 +38,9 @@ DEFAULT_CONFIG = {
     "temperature": TEMPERATURE,
     "top_p": TOP_P,
     "max_chars": 1200,
+    "ask_wait_for_speech_seconds": 180,
+    "ask_dictation_timeout_seconds": 900,
+    "spokenly_bridge": str(Path.home() / "Library" / "Application Support" / "Spokenly" / "mcp-bridge.sh"),
 }
 
 NORMALIZATIONS = {
@@ -250,7 +254,68 @@ def tools_list(req_id):
                         },
                         "required": ["text"],
                     },
-                }
+                },
+                {
+                    "name": "ask_user_voice",
+                    "description": "Ask the user one question through Agent Voice Bar: speak the exact question first, then capture the answer with the configured dictation backend. Do not use for passwords, secrets, or sensitive information.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "Question to speak and then show in the dictation prompt.",
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Optional short title for the inbox/session.",
+                            },
+                            "source": {
+                                "type": "string",
+                                "description": "Optional agent/source name, such as Codex, Claude, or Ubuntu.",
+                            },
+                            "priority": {
+                                "type": "string",
+                                "description": "Optional priority label: low, normal, high, or urgent.",
+                            },
+                            "wait_for_speech": {
+                                "type": "boolean",
+                                "description": "Whether to wait for local speech playback to finish before recording. Defaults to true.",
+                            },
+                        },
+                        "required": ["question"],
+                    },
+                },
+                {
+                    "name": "ask_user_voice_batch",
+                    "description": "Ask the user multiple questions one by one. Each question is spoken, then captured with dictation, and all answers are returned as structured content. Do not use for passwords, secrets, or sensitive information.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "questions": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Questions to ask in order.",
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Optional short title for the inbox/session.",
+                            },
+                            "source": {
+                                "type": "string",
+                                "description": "Optional agent/source name, such as Codex, Claude, or Ubuntu.",
+                            },
+                            "priority": {
+                                "type": "string",
+                                "description": "Optional priority label: low, normal, high, or urgent.",
+                            },
+                            "wait_for_speech": {
+                                "type": "boolean",
+                                "description": "Whether to wait for each local speech playback to finish before recording. Defaults to true.",
+                            },
+                        },
+                        "required": ["questions"],
+                    },
+                },
             ]
         },
     )
@@ -325,7 +390,8 @@ def synthesize_and_play(text, metadata=None):
     temperature = str(config.get("temperature") or TEMPERATURE)
     top_p = str(config.get("top_p") or TOP_P)
     source = clean_label(metadata.get("source"), "mcp", 40)
-    mode = mode_for_source(source, str(config.get("mode") or "autoplay"))
+    requested_mode = str(metadata.get("mode") or metadata.get("delivery") or "")
+    mode = requested_mode if requested_mode in {"autoplay", "notify", "silent"} else mode_for_source(source, str(config.get("mode") or "autoplay"))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(f"{voice}|{speed}|{temperature}|{top_p}|{speech_text}".encode()).hexdigest()[:16]
@@ -374,28 +440,292 @@ def synthesize_and_play(text, metadata=None):
     }
 
 
+def read_playback_events():
+    events = []
+    try:
+        if not PLAYBACK_FILE.exists():
+            return events
+        with PLAYBACK_FILE.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(event, dict):
+                    events.append(event)
+    except Exception:
+        return events
+    return events
+
+
+def wait_for_playback(file_path, started_after, timeout_seconds):
+    if not file_path or timeout_seconds <= 0:
+        return {"waited": False, "event": None}
+
+    terminal_events = {
+        "finished",
+        "watchdog_finished",
+        "stopped",
+        "skipped",
+        "missing_file",
+        "failed_load",
+        "failed_start",
+        "decode_failed",
+    }
+    deadline = time.monotonic() + timeout_seconds
+    saw_started = False
+    while time.monotonic() < deadline:
+        for event in read_playback_events():
+            if event.get("file") != file_path:
+                continue
+            event_time = str(event.get("at") or "")
+            if event_time < started_after:
+                continue
+            name = event.get("event")
+            if name == "started":
+                saw_started = True
+            if name in terminal_events:
+                return {"waited": True, "event": event}
+        time.sleep(0.5 if saw_started else 0.75)
+    return {
+        "waited": True,
+        "event": {
+            "event": "timeout",
+            "file": file_path,
+            "detail": f"No playback completion event after {timeout_seconds} seconds.",
+        },
+    }
+
+
+def call_spokenly_dictation(questions, timeout_seconds):
+    bridge = Path(str(load_config().get("spokenly_bridge") or DEFAULT_CONFIG["spokenly_bridge"])).expanduser()
+    if not bridge.exists():
+        raise RuntimeError(f"Spokenly MCP bridge not found: {bridge}")
+    if not os.access(bridge, os.X_OK):
+        raise RuntimeError(f"Spokenly MCP bridge is not executable: {bridge}")
+
+    initialize_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "agent-voice-bar", "version": "0.1.0"},
+        },
+    }
+    call_payload = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "ask_user_dictation",
+            "arguments": {"questions": questions},
+        },
+    }
+    input_text = json.dumps(initialize_payload) + "\n" + json.dumps(call_payload) + "\n"
+    proc = subprocess.Popen(
+        [str(bridge)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(input_text, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise TimeoutError(f"Spokenly dictation timed out after {timeout_seconds} seconds")
+
+    if proc.returncode not in (0, None):
+        raise RuntimeError((stderr or "Spokenly dictation failed").strip())
+
+    responses = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            responses.append(json.loads(line))
+        except Exception:
+            continue
+    for item in reversed(responses):
+        if item.get("id") == 2:
+            if item.get("error"):
+                raise RuntimeError(item["error"].get("message") or str(item["error"]))
+            return item.get("result") or {}
+    raise RuntimeError("Spokenly did not return a dictation result")
+
+
+def extract_dictation_text(result):
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict):
+        for key in ("answer", "text", "transcript", "response"):
+            value = structured.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        if isinstance(structured.get("answers"), list):
+            return "\n".join(str(value).strip() for value in structured["answers"] if str(value).strip()).strip()
+
+    content = result.get("content")
+    if isinstance(content, list):
+        texts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                value = str(block.get("text") or "").strip()
+                if value:
+                    texts.append(value)
+        joined = "\n".join(texts).strip()
+        if joined:
+            try:
+                parsed = json.loads(joined)
+                if isinstance(parsed, dict):
+                    for key in ("answer", "text", "transcript", "response"):
+                        value = parsed.get(key)
+                        if isinstance(value, str) and value.strip():
+                            return value.strip()
+            except Exception:
+                pass
+            return joined
+    return ""
+
+
+def append_answer_item(question, answer, metadata):
+    answer = " ".join((answer or "").split())
+    item = {
+        "id": str(uuid.uuid4()),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ready_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "source": clean_label(metadata.get("source"), "User", 40),
+        "title": clean_label(metadata.get("title"), "Voice answer", 120),
+        "priority": clean_label(metadata.get("priority"), "normal", 20).lower(),
+        "mode": "silent",
+        "status": "ready",
+        "voice": "",
+        "speed": "",
+        "temperature": "",
+        "top_p": "",
+        "text": f"Question: {question}\nAnswer: {answer or '(no answer captured)'}",
+        "speech_text": "",
+        "file": None,
+    }
+    publish_state(item)
+
+
+def ask_one_question(question, metadata):
+    question = " ".join((question or "").split())
+    if not question:
+        raise ValueError("question is required")
+    config = load_config()
+    wait_for_speech = metadata.get("wait_for_speech")
+    wait_for_speech = True if wait_for_speech is None else bool(wait_for_speech)
+    wait_seconds = int(config.get("ask_wait_for_speech_seconds") or DEFAULT_CONFIG["ask_wait_for_speech_seconds"])
+    dictation_timeout = int(config.get("ask_dictation_timeout_seconds") or DEFAULT_CONFIG["ask_dictation_timeout_seconds"])
+
+    ask_metadata = {
+        **metadata,
+        "mode": "autoplay",
+        "title": clean_label(metadata.get("title"), "Question for you", 120),
+        "priority": clean_label(metadata.get("priority"), "high", 20),
+    }
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    speech_result = synthesize_and_play(question, ask_metadata)
+    playback_result = {"waited": False, "event": None}
+    if wait_for_speech:
+        playback_result = wait_for_playback(speech_result.get("file"), started_at, wait_seconds)
+
+    dictation_result = call_spokenly_dictation([question], dictation_timeout)
+    answer = extract_dictation_text(dictation_result)
+    append_answer_item(question, answer, {**metadata, "source": "User", "title": f"Answer: {clean_label(metadata.get('title'), 'Question', 80)}"})
+    return {
+        "question": question,
+        "answer": answer,
+        "speech": speech_result,
+        "playback": playback_result,
+        "dictation": dictation_result,
+    }
+
+
+def ask_batch(questions, metadata):
+    if not isinstance(questions, list) or not questions:
+        raise ValueError("questions must be a non-empty array")
+    answers = []
+    for index, question in enumerate(questions, start=1):
+        scoped = {
+            **metadata,
+            "title": metadata.get("title") or f"Question {index} of {len(questions)}",
+        }
+        result = ask_one_question(str(question), scoped)
+        answers.append({
+            "index": index,
+            "question": result["question"],
+            "answer": result["answer"],
+            "playback": result["playback"],
+        })
+    return {"answers": answers}
+
+
 def tools_call(req_id, params):
     name = params.get("name")
     args = params.get("arguments") or {}
-    if name != "speak_text":
-        return response(req_id, error={"code": -32601, "message": f"Unknown tool: {name}"})
 
     try:
-        result = synthesize_and_play(args.get("text", ""), args)
+        if name == "speak_text":
+            result = synthesize_and_play(args.get("text", ""), args)
+            return response(
+                req_id,
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Spoke text with {result['voice']}.",
+                        }
+                    ],
+                    "structuredContent": result,
+                },
+            )
+        if name == "ask_user_voice":
+            result = ask_one_question(args.get("question", ""), args)
+            return response(
+                req_id,
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": result["answer"],
+                        }
+                    ],
+                    "structuredContent": {
+                        "question": result["question"],
+                        "answer": result["answer"],
+                        "playback": result["playback"],
+                    },
+                },
+            )
+        if name == "ask_user_voice_batch":
+            result = ask_batch(args.get("questions"), args)
+            return response(
+                req_id,
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(result, indent=2),
+                        }
+                    ],
+                    "structuredContent": result,
+                },
+            )
+        return response(req_id, error={"code": -32601, "message": f"Unknown tool: {name}"})
+    except Exception as exc:
         return response(
             req_id,
-            {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Spoke text with {result['voice']}.",
-                    }
-                ],
-                "structuredContent": result,
-            },
+            error={"code": -32000, "message": str(exc)},
         )
-    except Exception as exc:
-        return response(req_id, error={"code": -32000, "message": str(exc)})
 
 
 def handle_jsonrpc(payload):

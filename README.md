@@ -7,9 +7,9 @@
 ![Agent Voice Bar hero](docs/assets/agent-voice-bar-hero.png)
 
 Agent Voice Bar is a local-first macOS app for messages from AI agents. Codex,
-Claude Code, or any MCP-capable tool can call a `speak_text` tool, and your Mac
-stores that message in an inbox, renders a local voice clip, and lets the app
-decide whether to speak, notify, or stay quiet.
+Claude Code, or any MCP-capable tool can call Agent Voice Bar tools, and your
+Mac stores those messages in an inbox, renders local voice clips, and lets the
+app decide whether to speak, notify, record an answer, or stay quiet.
 
 It is especially useful when agents run in another terminal, another app, or a
 remote SSH box. With a reverse SSH tunnel, a cloud/Ubuntu agent can still send
@@ -22,6 +22,8 @@ This is beta software. The core loop works, but the app is still being polished:
 - inbox-first menu-bar app and full Dashboard window
 - local Qwen/MLX TTS backend
 - MCP `speak_text` tool with optional title/source/priority metadata
+- MCP `ask_user_voice` and `ask_user_voice_batch` tools for coordinated
+  speak-then-dictate question flows
 - Speak/Notify/DND delivery modes
 - app-owned playback and notifications
 - serial autoplay queue to avoid readouts interrupting each other
@@ -43,8 +45,10 @@ This is beta software. The core loop works, but the app is still being polished:
 
 Spokenly is great for speech-to-text: you talk, agents receive text.
 
-Agent Voice Bar is the other direction: agents talk, you receive a local inbox.
-Speech is an extra layer on top of the inbox, not the whole product.
+Agent Voice Bar started as the other direction: agents talk, you receive a local
+inbox. It is now becoming the coordinator for both directions. Agents should talk
+to one MCP server, while Agent Voice Bar decides when to speak, when to notify,
+and when to hand off to a dictation backend such as Spokenly.
 
 Use it for:
 
@@ -53,6 +57,8 @@ Use it for:
 - background coding/research agents
 - "tell me when you need me" workflows
 - local-only TTS without cloud accounts
+- cohesive speak-then-listen question flows using Spokenly or a future local STT
+  backend
 
 ## What It Does
 
@@ -76,23 +82,43 @@ Use it for:
   finished, stopped, or failed.
 - Shows the latest local playback result on replayable messages.
 - Works with remote agents through a reverse SSH tunnel to your Mac.
+- Can ask you questions by speaking the exact prompt first, waiting for playback,
+  then opening Spokenly dictation so speech and recording do not overlap.
 
 ## Architecture
 
 ```text
 AI agent
   |
-  | MCP speak_text
+  | MCP speak_text / ask_user_voice
   v
-Qwen speech backend on Mac
+Agent Voice Bar MCP backend on Mac
   |
-  | queue.jsonl + generated wav files
+  | queue.jsonl + generated wav files + playback events
   v
 Agent Voice Bar macOS app
   |
   | inbox / dashboard / notify / autoplay / silent
   v
 Your ears + replayable inbox
+```
+
+Question flow:
+
+```text
+AI agent
+  |
+  | MCP ask_user_voice
+  v
+Agent Voice Bar
+  |
+  | speak exact question with local Qwen TTS
+  v
+Playback finishes
+  |
+  | call Spokenly ask_user_dictation
+  v
+Your spoken answer -> agent response + inbox transcript
 ```
 
 Remote flow:
@@ -174,7 +200,10 @@ Local Claude Code:
 claude mcp add qwen_speech -- "$HOME/Library/Application Support/AgentVoiceBar/qwen-speech-mcp.sh"
 ```
 
-Then ask your agent to call `qwen_speech.speak_text`.
+Then ask your agent to call `qwen_speech.speak_text` for one-way messages, or
+`qwen_speech.ask_user_voice` when it needs an answer. The server name is still
+`qwen_speech` for compatibility, but the product direction is Agent Voice Bar as
+the single MCP interface for agent speech and dictation.
 
 Basic tool payload:
 
@@ -188,6 +217,34 @@ Basic tool payload:
 ```
 
 Only `text` is required.
+
+Question payload:
+
+```json
+{
+  "question": "Should I run the migration now?",
+  "title": "Deployment check",
+  "source": "Claude",
+  "priority": "high"
+}
+```
+
+Batch question payload:
+
+```json
+{
+  "questions": [
+    "Which branch should I use?",
+    "Should I publish this as a beta release?"
+  ],
+  "title": "Release questions",
+  "source": "Codex"
+}
+```
+
+`ask_user_voice` speaks the exact question through local Qwen TTS, waits for
+playback to finish, then opens Spokenly dictation. `ask_user_voice_batch` does
+the same thing one question at a time and returns structured answers.
 
 Full local/remote instructions are in [docs/mcp-and-ssh.md](docs/mcp-and-ssh.md).
 

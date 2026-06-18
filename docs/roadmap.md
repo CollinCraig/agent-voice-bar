@@ -10,6 +10,9 @@ Near-term:
 
 - Inbox-first menu-bar layout with message actions attached to the message list.
 - App-owned playback, notifications, unread state, and stable inbox reloads.
+- Agent Voice Bar as the single MCP interface for one-way speech and two-way
+  question flows.
+- Coordinated speak-then-dictate flow using Qwen TTS and Spokenly dictation.
 - Message metadata: title, source agent, priority, status, and generated audio.
 - Read/unread, pin, delete, and filters for the menu-bar inbox.
 - Full message detail with original prompt, speech-normalized text, render errors,
@@ -24,5 +27,6 @@ Next:
 - Better remote setup helpers for reverse SSH tunnels and LaunchAgents.
 - Local model picker with install/status checks for Qwen, Kokoro, Chatterbox, and
   other on-device TTS engines.
-- Optional STT pairing for two-way local voice workflows.
+- Optional local STT pairing so Spokenly can remain the premium/default backend
+  but is not required.
 - Signed/notarized beta builds.
