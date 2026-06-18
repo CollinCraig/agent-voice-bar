@@ -1253,6 +1253,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     private let controlsTitle = NSTextField(labelWithString: "Voice Tuning")
     private let inboxCountLabel = NSTextField(labelWithString: "0 messages")
     private let playbackStatusLabel = NSTextField(labelWithString: "Playback idle")
+    private let sidecarLabel = NSTextField(labelWithString: "Spokenly Sidecar")
+    private let labsLabel = NSTextField(labelWithString: "Native Labs")
     private let notificationTitleLabel = NSTextField(labelWithString: "System")
     private let selectedTitleLabel = NSTextField(labelWithString: "Select a message")
     private let selectedMetaLabel = NSTextField(labelWithString: "Click a row to inspect or replay it.")
@@ -1284,7 +1286,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
     }
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 760))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 780, height: 680))
         view.wantsLayer = true
         view.layer?.backgroundColor = Theme.background.cgColor
         view.layer?.cornerRadius = 14
@@ -1344,6 +1346,12 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         header.addArrangedSubview(icon)
         header.addArrangedSubview(titleStack)
         header.addArrangedSubview(spacer)
+        header.addArrangedSubview(chipLabel(sidecarLabel, color: Theme.green))
+        header.addArrangedSubview(chipLabel(labsLabel, color: Theme.cyan))
+        dashboardButton.bezelStyle = .rounded
+        dashboardButton.target = self
+        dashboardButton.action = #selector(openDashboardTapped)
+        header.addArrangedSubview(dashboardButton)
         header.addArrangedSubview(statusDot())
         root.addArrangedSubview(header)
 
@@ -1376,6 +1384,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         voiceSummary.addArrangedSubview(voiceSummarySpacer)
         voiceSummary.addArrangedSubview(tuneButton)
         voiceSummary.addArrangedSubview(speakTestButton)
+        root.addArrangedSubview(panel(voiceSummary, fill: false, padding: 8))
 
         let inboxSectionHeader = NSStackView()
         inboxSectionHeader.orientation = .vertical
@@ -1399,12 +1408,8 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         inboxTitleStack.addArrangedSubview(playbackStatusLabel)
         let inboxSpacer = NSView()
         inboxSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        dashboardButton.bezelStyle = .rounded
-        dashboardButton.target = self
-        dashboardButton.action = #selector(openDashboardTapped)
         inboxHeader.addArrangedSubview(inboxTitleStack)
         inboxHeader.addArrangedSubview(inboxSpacer)
-        inboxHeader.addArrangedSubview(dashboardButton)
         inboxSectionHeader.addArrangedSubview(inboxHeader)
 
         let searchRow = NSStackView()
@@ -1455,12 +1460,10 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         inboxActions.addArrangedSubview(filterControl)
         inboxActions.addArrangedSubview(actionSpacer)
         inboxActions.addArrangedSubview(replayButton)
-        inboxActions.addArrangedSubview(skipButton)
         inboxActions.addArrangedSubview(stopButton)
         inboxActions.addArrangedSubview(archiveButton)
         inboxActions.addArrangedSubview(clearInboxButton)
         inboxSectionHeader.addArrangedSubview(inboxActions)
-        root.addArrangedSubview(inboxSectionHeader)
 
         inboxDocument.wantsLayer = true
         inboxDocument.layer?.backgroundColor = NSColor.clear.cgColor
@@ -1479,18 +1482,15 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         inboxPanel.layer?.borderWidth = 1
         inboxPanel.addSubview(inboxScrollView)
         NSLayoutConstraint.activate([
-            inboxPanel.heightAnchor.constraint(equalToConstant: 300),
+            inboxPanel.heightAnchor.constraint(equalToConstant: 458),
             inboxScrollView.leadingAnchor.constraint(equalTo: inboxPanel.leadingAnchor, constant: 10),
             inboxScrollView.trailingAnchor.constraint(equalTo: inboxPanel.trailingAnchor, constant: -10),
             inboxScrollView.topAnchor.constraint(equalTo: inboxPanel.topAnchor, constant: 10),
             inboxScrollView.bottomAnchor.constraint(equalTo: inboxPanel.bottomAnchor, constant: -10),
         ])
-        root.addArrangedSubview(inboxPanel)
 
         let selectedPanel = buildSelectedMessagePanel()
         messageDetailPanel = selectedPanel
-        root.addArrangedSubview(selectedPanel)
-        root.addArrangedSubview(panel(voiceSummary, fill: false, padding: 8))
 
         let controlsShell = NSStackView()
         controlsShell.orientation = .vertical
@@ -1519,7 +1519,6 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         tuningPanel.setContentHuggingPriority(.required, for: .vertical)
         tuningPanel.isHidden = !tuningVisible
         controlsPanel = tuningPanel
-        root.addArrangedSubview(tuningPanel)
         voiceField.delegate = self
         voiceField.target = self
         voiceField.action = #selector(voiceChanged)
@@ -1559,23 +1558,48 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         testNotificationButton.action = #selector(testNotificationTapped)
         doctorButton.target = self
         doctorButton.action = #selector(doctorTapped)
-        root.addArrangedSubview(panel(notifyRow, fill: false))
+        let notifyPanel = panel(notifyRow, fill: false)
 
         let bottom = NSStackView()
         bottom.orientation = .horizontal
         bottom.alignment = .centerY
         bottom.spacing = 8
+        bottom.distribution = .fillEqually
         for (label, action) in [
-            ("Settings", #selector(openNotificationSettingsTapped)),
-            ("Pronunciations", #selector(openPronunciationsTapped)),
-            ("Folder", #selector(openFolderTapped)),
+            ("Prefs", #selector(openNotificationSettingsTapped)),
+            ("Words", #selector(openPronunciationsTapped)),
+            ("Files", #selector(openFolderTapped)),
             ("Quit", #selector(quitTapped)),
         ] {
             let button = NSButton(title: label, target: self, action: action)
             button.bezelStyle = .rounded
             bottom.addArrangedSubview(button)
         }
-        root.addArrangedSubview(bottom)
+        let bottomPanel = panel(bottom, fill: false, padding: 8)
+
+        let leftColumn = NSStackView()
+        leftColumn.orientation = .vertical
+        leftColumn.spacing = 10
+        leftColumn.addArrangedSubview(inboxSectionHeader)
+        leftColumn.addArrangedSubview(inboxPanel)
+        leftColumn.widthAnchor.constraint(equalToConstant: 488).isActive = true
+
+        let rightColumn = NSStackView()
+        rightColumn.orientation = .vertical
+        rightColumn.spacing = 10
+        rightColumn.addArrangedSubview(selectedPanel)
+        rightColumn.addArrangedSubview(tuningPanel)
+        rightColumn.addArrangedSubview(notifyPanel)
+        rightColumn.addArrangedSubview(bottomPanel)
+        rightColumn.setContentHuggingPriority(.defaultLow, for: .vertical)
+
+        let mainSplit = NSStackView()
+        mainSplit.orientation = .horizontal
+        mainSplit.alignment = .top
+        mainSplit.spacing = 12
+        mainSplit.addArrangedSubview(leftColumn)
+        mainSplit.addArrangedSubview(rightColumn)
+        root.addArrangedSubview(mainSplit)
     }
 
     private func statusDot() -> NSView {
@@ -1589,6 +1613,30 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
             dot.heightAnchor.constraint(equalToConstant: 12),
         ])
         return dot
+    }
+
+    private func chipLabel(_ label: NSTextField, color: NSColor) -> NSView {
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        label.textColor = color
+        label.alignment = .center
+        label.maximumNumberOfLines = 1
+
+        let box = NSView()
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.wantsLayer = true
+        box.layer?.backgroundColor = color.withAlphaComponent(0.12).cgColor
+        box.layer?.borderColor = color.withAlphaComponent(0.55).cgColor
+        box.layer?.borderWidth = 1
+        box.layer?.cornerRadius = 7
+        label.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 9),
+            label.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -9),
+            label.topAnchor.constraint(equalTo: box.topAnchor, constant: 4),
+            label.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -4),
+        ])
+        return box
     }
 
     private func buildSelectedMessagePanel() -> NSView {
@@ -1619,14 +1667,14 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
-        scroll.heightAnchor.constraint(equalToConstant: 52).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 168).isActive = true
 
         stack.addArrangedSubview(selectedTitleLabel)
         stack.addArrangedSubview(selectedMetaLabel)
         stack.addArrangedSubview(scroll)
 
         let box = panel(stack, fill: false, padding: 10)
-        box.heightAnchor.constraint(equalToConstant: 104).isActive = true
+        box.heightAnchor.constraint(equalToConstant: 244).isActive = true
         return box
     }
 
@@ -1730,6 +1778,9 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         let modeText = displayModeName(config.mode)
         let updated = state?.updated_at ?? "never"
         statusLabel.stringValue = "\(modeText) / updated \(shortTimestamp(updated))"
+        sidecarLabel.stringValue = config.question_voice == "agent_voice_bar" ? "Qwen Questions" : "Spokenly Sidecar"
+        labsLabel.stringValue = config.dictation_backend == "native" ? "Native Active" : "Native Labs"
+        labsLabel.textColor = config.dictation_backend == "native" ? Theme.green : Theme.cyan
         tuneButton.title = tuningVisible ? "Hide" : "Tune"
         controlsPanel?.isHidden = !tuningVisible
 
@@ -1995,7 +2046,7 @@ final class VoicePopoverController: NSViewController, NSTextFieldDelegate, NSSea
         tuningVisible.toggle()
         controlsPanel?.isHidden = !tuningVisible
         tuneButton.title = tuningVisible ? "Hide" : "Tune"
-        view.window?.setContentSize(NSSize(width: 500, height: tuningVisible ? 860 : 760))
+        view.window?.setContentSize(NSSize(width: 780, height: tuningVisible ? 760 : 680))
     }
 
     @objc private func modeChanged() {
@@ -2422,7 +2473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         popoverController.onConfigChanged = { [weak self] in self?.updateIcon() }
         popoverController.onReplayRateChanged = { [weak self] rate in self?.setReplayRate(rate) }
         panel = PopoverPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 680),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false

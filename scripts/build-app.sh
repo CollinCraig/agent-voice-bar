@@ -31,6 +31,10 @@ find "$APP" -exec xattr -c {} \; >/dev/null 2>&1 || true
 xattr -d com.apple.FinderInfo "$APP" >/dev/null 2>&1 || true
 xattr -d 'com.apple.fileprovider.fpfs#P' "$APP" >/dev/null 2>&1 || true
 xattr -dr com.apple.provenance "$APP" >/dev/null 2>&1 || true
+find "$APP" -print0 | xargs -0 xattr -d com.apple.FinderInfo >/dev/null 2>&1 || true
+find "$APP" -print0 | xargs -0 xattr -d 'com.apple.fileprovider.fpfs#P' >/dev/null 2>&1 || true
+find "$APP" -print0 | xargs -0 xattr -d com.apple.provenance >/dev/null 2>&1 || true
+xattr -cr "$APP" || true
 find "$APP" -name '._*' -delete >/dev/null 2>&1 || true
 codesign --force --deep --sign - "$APP" >/dev/null
 
