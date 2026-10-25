@@ -15,6 +15,9 @@ It is especially useful when agents run in another terminal, another app, or a
 remote SSH box. With a reverse SSH tunnel, a cloud/Ubuntu agent can still send
 voice updates to the Mac on your desk.
 
+## Development approach
+I use AI coding assistants in my development workflow, with project direction and orchestration led by me. I don’t present every line as hand-written work. This remains beta software; see the status and setup notes below for its current scope.
+
 ## Status
 
 This is beta software. The core loop works, but the app is still being polished:
